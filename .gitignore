@@ -1,0 +1,21 @@
+# Credentials -- never commit. See docs/security.md.
+.env
+
+# Your music. Project folders hold audio you own; keep them out of git so the
+# repo stays a toolchain, not a library. Remove this block if you specifically
+# want a project versioned, and consider git-lfs if you do.
+projects/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Audio scratch
+*.wav.part-*
+
+# macOS
+.DS_Store

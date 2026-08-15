@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "music-stack"
+version = "0.1.0"
+description = "A programmable songwriting pipeline over Music.AI, Kits AI, and ffmpeg"
+readme = "README.md"
+requires-python = ">=3.9"
+
+# No runtime dependencies, on purpose. Every HTTP call, multipart body and
+# poll loop is standard library. This is what makes `pip install -e .` work
+# on a fresh machine with nothing but Python, and what stops a yanked or
+# renamed upstream release from breaking the bootstrap.
+dependencies = []
+
+[project.optional-dependencies]
+# The vendor SDKs are genuinely optional -- the CLI never imports them. Install
+# them only if you want to script against their own abstractions as well.
+# Versions are intentionally left unpinned: pin them yourself once you have
+# confirmed what your account actually resolves to.
+vendor = ["musicai-sdk"]
+
+[project.scripts]
+music-stack = "music_stack.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
