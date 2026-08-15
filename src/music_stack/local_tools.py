@@ -85,6 +85,30 @@ TOOLS = {
     ),
 }
 
+#: Whisper reaches a Mac by several routes, and the argv differs for each.
+#: Rather than demand one, detect whichever is already installed and adapt.
+#: Ordered fastest-first on Apple Silicon.
+WHISPER_VARIANTS = (
+    # (binary, kind, install hint)
+    ("mlx_whisper", "mlx", "pip install -U mlx-whisper"),
+    ("whisper-cli", "cpp", "brew install whisper-cpp"),
+    ("whisper-cpp", "cpp", "brew install whisper-cpp"),
+    ("whisper", "openai", "pip install -U openai-whisper"),
+)
+
+
+def find_whisper():
+    """Return ``(path, binary, kind)`` for the first Whisper found, else None.
+
+    Lets the pipeline use an audio model that is already on the machine
+    instead of insisting on one particular packaging of it.
+    """
+    for binary, kind, _install in WHISPER_VARIANTS:
+        found = shutil.which(binary)
+        if found:
+            return found, binary, kind
+    return None
+
 #: Demucs writes to <out>/<model>/<input-stem>/<source>.wav
 DEFAULT_DEMUCS_MODEL = "htdemucs"
 
@@ -236,42 +260,91 @@ def summarize_structure(json_path):
 # -- lyrics ---------------------------------------------------------------
 
 
-def lyrics_command(path, out_dir, *, model="small", language=None, binary="whisper"):
-    """Build the Whisper argv."""
-    argv = [
-        binary,
-        str(path),
-        "--model", model,
-        "--output_dir", str(out_dir),
-        "--output_format", "all",
-    ]
+TRANSCRIPT_SUFFIXES = (".txt", ".json", ".srt", ".vtt", ".tsv")
+
+
+def lyrics_command(path, out_dir, *, model="small", language=None,
+                   binary="whisper", kind="openai"):
+    """Build the Whisper argv for whichever variant is installed.
+
+    The three packagings take different flags; ``kind`` selects the dialect.
+    """
+    path, out_dir = str(path), str(out_dir)
+    if kind == "cpp":
+        # whisper.cpp wants a GGUF/GGML model file, not a model name, and
+        # writes alongside the output prefix rather than into a directory.
+        argv = [binary, "-f", path, "-otxt", "-oj",
+                "-of", os.path.join(out_dir, Path(path).stem)]
+        if model and os.path.exists(model):
+            argv += ["-m", model]
+        if language:
+            argv += ["-l", language]
+        return argv
+
+    # mlx_whisper and openai-whisper share the same flag surface.
+    argv = [binary, path, "--model", model,
+            "--output_dir", out_dir, "--output_format", "all"]
     if language:
         argv += ["--language", language]
     return argv
 
 
 def lyrics(path, out_dir, *, model="small", language=None, dry_run=False):
-    """Transcribe a vocal take with Whisper."""
+    """Transcribe a vocal take with whichever Whisper is on this machine."""
     path = _check_input(path)
     out_dir = Path(out_dir)
+
+    found = find_whisper()
+    if found is None:
+        if not dry_run:
+            hints = "\n".join(
+                "  {:<13} {}".format(b, i) for b, _k, i in WHISPER_VARIANTS
+            )
+            raise MusicStackError(
+                "No Whisper installation found. Any of these works:\n" + hints
+            )
+        binary, kind = "whisper", "openai"
+    else:
+        _, binary, kind = found
+
     argv = lyrics_command(
-        path, out_dir, model=model, language=language,
-        binary=TOOLS["whisper"].binary if dry_run else TOOLS["whisper"].require(),
+        path, out_dir, model=model, language=language, binary=binary, kind=kind
     )
     if dry_run:
-        return {"command": argv}
+        return {"command": argv, "variant": kind}
 
     out_dir.mkdir(parents=True, exist_ok=True)
     _run(argv)
     produced = sorted(
-        p for p in out_dir.iterdir() if p.is_file() and p.suffix in
-        (".txt", ".json", ".srt", ".vtt", ".tsv")
+        p for p in out_dir.iterdir()
+        if p.is_file() and p.suffix in TRANSCRIPT_SUFFIXES
     )
     if not produced:
         raise MusicStackError(
             "Whisper finished but wrote nothing to {}.".format(out_dir)
         )
-    return {"command": argv, "files": [str(p) for p in produced]}
+    return {"command": argv, "variant": kind, "files": [str(p) for p in produced]}
+
+
+def read_transcript(paths):
+    """Pull plain text out of whatever transcript files Whisper produced."""
+    for path in paths:
+        p = Path(path)
+        if p.suffix == ".txt":
+            text = p.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                return text
+    for path in paths:
+        p = Path(path)
+        if p.suffix == ".json":
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except ValueError:
+                continue
+            text = (data.get("text") or "").strip()
+            if text:
+                return text
+    return ""
 
 
 def detect_device():

@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, audio, local_tools, projects
+from . import __version__, audio, brief, local_tools, projects
 from .adapters import kits as kits_adapter
 from .adapters import moises as moises_adapter
 from .adapters import music_ai as music_ai_adapter
@@ -102,6 +102,28 @@ def cmd_audio_normalize(args, settings):
 def cmd_audio_inspect(args, settings):
     data = audio.inspect(args.path)
     _print_json(data["summary"] if not args.full else data)
+    return 0
+
+
+# -- analyze (the one command) --------------------------------------------
+
+
+def cmd_analyze(args, settings):
+    """Everything, in one pass, using whatever this machine has."""
+    result = brief.analyze(
+        settings.projects_dir,
+        args.input,
+        title=args.title,
+        skip=tuple(args.skip or ()),
+        dry_run=args.dry_run,
+    )
+    if args.dry_run:
+        _print_json(result)
+        return 0
+    print("\n" + "=" * 60)
+    print(result["brief"])
+    print("=" * 60)
+    print("\nWritten to {}".format(result["brief_path"]))
     return 0
 
 
@@ -367,6 +389,21 @@ def build_parser():
     sub.add_parser("doctor", help="check local tools and credentials").set_defaults(
         func=cmd_doctor
     )
+
+    ana = sub.add_parser(
+        "analyze",
+        help="ONE COMMAND: normalize, structure, stems, lyrics, and a brief",
+    )
+    ana.add_argument("--input", required=True, help="any audio or video file")
+    ana.add_argument("--title", help="song title (defaults to the filename)")
+    ana.add_argument(
+        "--skip",
+        action="append",
+        choices=["normalize", "structure", "stems", "lyrics"],
+        help="skip a stage; repeatable",
+    )
+    ana.add_argument("--dry-run", action="store_true", help="plan only, run nothing")
+    ana.set_defaults(func=cmd_analyze)
 
     project = sub.add_parser("project", help="song project directories")
     project_sub = project.add_subparsers(dest="subcommand", required=True)
