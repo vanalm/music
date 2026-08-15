@@ -123,6 +123,10 @@ voice conversion is the same feature would produce quietly wrong results.
 | `doctor` | local tools + credential presence | no |
 | `project new/list` | song folder scaffolding | no |
 | `audio normalize/inspect` | local ffmpeg conversion + ffprobe | no |
+| `local doctor` | which analysis tools are installed | no |
+| `local stems` | Demucs separation, on your machine | no |
+| `local structure` | allin1 — tempo, beats, labelled sections | no |
+| `local lyrics` | Whisper transcription | no |
 | `music-ai workflows` | list your account's workflows | no |
 | `music-ai process` | upload → run → download | **yes** |
 | `music-ai job <id>` | fetch one job's status | no |
@@ -159,6 +163,30 @@ PYTHONPATH=src:tests python3 -m unittest discover -s tests
 71 tests, no network, no credentials required. The ffmpeg round-trip tests skip
 themselves when ffmpeg is absent, so the suite is green on a fresh checkout and
 gains 5 more tests once you have bootstrapped.
+
+## The hosted APIs are mostly gated — run it locally instead
+
+Worth knowing before you shop for an account:
+
+- **Music.AI** has no self-serve signup. Its login page offers only "Get
+  Enterprise access", and its Contact Sales page redirects individuals to
+  moises.ai. Articles describing a Music.AI free tier are stale.
+- **No Moises consumer plan grants an API key** — not Free, not Premium, not
+  Pro. API billing lives on Music.AI, separately. Don't buy Pro expecting one.
+- **Kits AI** does have genuine self-serve signup, including a free tier.
+
+So the `local` commands are the primary path, and they're better anyway: no
+account, no per-minute billing, and your unreleased demos never leave the Mac.
+Demucs is the model family Moises' own separation is built on.
+
+```bash
+music-stack local doctor        # what's installed, what to install
+pip install -U demucs          # stems
+pip install -U openai-whisper  # lyrics
+```
+
+Every `local` command takes `--dry-run`, which prints the exact argv without
+running it — check the command before committing to a long job.
 
 ## Status of each integration
 

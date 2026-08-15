@@ -11,8 +11,9 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, audio, projects
+from . import __version__, audio, local_tools, projects
 from .adapters import kits as kits_adapter
+from .adapters import moises as moises_adapter
 from .adapters import music_ai as music_ai_adapter
 from .adapters import suno as suno_adapter
 from .config import Settings
@@ -102,6 +103,70 @@ def cmd_audio_inspect(args, settings):
     data = audio.inspect(args.path)
     _print_json(data["summary"] if not args.full else data)
     return 0
+
+
+# -- local ----------------------------------------------------------------
+
+
+def _emit(result):
+    """Print a local-tool result: the command, then whatever it produced."""
+    print("$ {}".format(" ".join(result["command"])))
+    if result.get("cwd"):
+        print("  (run from {})".format(result["cwd"]))
+    for path in result.get("files", []):
+        print("  {}".format(path))
+    return 0
+
+
+def cmd_local_doctor(args, settings):
+    print("Local analysis tools (all optional, none upload anything)\n")
+    missing = []
+    for key, binary, found, install in local_tools.status():
+        print("  {:<9} {}".format(key, found or "MISSING"))
+        if not found:
+            missing.append((binary, install))
+    device = local_tools.detect_device()
+    print("\n  device    {}".format(device or "default (no Apple Silicon MPS)"))
+    if missing:
+        print("\nTo install what's missing:")
+        for binary, install in missing:
+            print("  {:<9} {}".format(binary, install))
+    return 0
+
+
+def cmd_local_stems(args, settings):
+    return _emit(
+        local_tools.stems(
+            args.input,
+            args.output,
+            model=args.model,
+            device=args.device or local_tools.detect_device(),
+            two_stems=args.two_stems,
+            dry_run=args.dry_run,
+        )
+    )
+
+
+def cmd_local_structure(args, settings):
+    result = local_tools.structure(args.input, args.output, dry_run=args.dry_run)
+    _emit(result)
+    if not args.dry_run:
+        for path in result["files"]:
+            print()
+            _print_json(local_tools.summarize_structure(path))
+    return 0
+
+
+def cmd_local_lyrics(args, settings):
+    return _emit(
+        local_tools.lyrics(
+            args.input,
+            args.output,
+            model=args.model,
+            language=args.language,
+            dry_run=args.dry_run,
+        )
+    )
 
 
 # -- music.ai -------------------------------------------------------------
@@ -208,6 +273,49 @@ def cmd_kits_convert(args, settings):
     return 0
 
 
+# -- moises ---------------------------------------------------------------
+
+
+def _moises_client(settings):
+    key = settings.require("MOISES_API_KEY", service="Moises")
+    scheme = settings.get("MOISES_AUTH_SCHEME", "raw")
+    return moises_adapter.MoisesClient(key, auth_scheme=scheme)
+
+
+def cmd_moises_auth(args, settings):
+    """Find out which auth scheme the server accepts, empirically."""
+    client = _moises_client(settings)
+    scheme = client.detect_auth_scheme()
+    print("Moises accepted the key using the {!r} scheme.".format(scheme))
+    if scheme != "raw":
+        print("Pin it by adding to .env:\n  MOISES_AUTH_SCHEME={}".format(scheme))
+    return 0
+
+
+def cmd_moises_introspect(args, settings):
+    """Print the live GraphQL schema so real queries can be written from it."""
+    client = _moises_client(settings)
+    if args.detect_auth:
+        client.detect_auth_scheme()
+    schema = client.introspect()
+    if args.json:
+        _print_json(schema)
+    else:
+        print(moises_adapter.format_schema(schema, contains=args.contains))
+    return 0
+
+
+def cmd_moises_query(args, settings):
+    """Run an arbitrary GraphQL operation — the escape hatch until the
+    schema-specific commands exist."""
+    query = args.query
+    if query == "-":
+        query = sys.stdin.read()
+    variables = json.loads(args.variables) if args.variables else None
+    _print_json(_moises_client(settings).execute(query, variables))
+    return 0
+
+
 # -- suno -----------------------------------------------------------------
 
 
@@ -284,6 +392,38 @@ def build_parser():
     insp.add_argument("--full", action="store_true", help="full ffprobe JSON")
     insp.set_defaults(func=cmd_audio_inspect)
 
+    loc = sub.add_parser(
+        "local", help="local analysis — no account, nothing uploaded"
+    )
+    loc_sub = loc.add_subparsers(dest="subcommand", required=True)
+    loc_sub.add_parser("doctor", help="which local tools are installed").set_defaults(
+        func=cmd_local_doctor
+    )
+    st = loc_sub.add_parser("stems", help="separate stems with Demucs")
+    st.add_argument("--input", required=True)
+    st.add_argument("--output", required=True)
+    st.add_argument("--model", default=local_tools.DEFAULT_DEMUCS_MODEL)
+    st.add_argument("--device", help="e.g. mps on Apple Silicon (auto-detected)")
+    st.add_argument("--two-stems", help="isolate one source, e.g. vocals")
+    st.add_argument("--dry-run", action="store_true", help="print the command only")
+    st.set_defaults(func=cmd_local_stems)
+
+    stru = loc_sub.add_parser(
+        "structure", help="tempo, beats, and labelled sections with allin1"
+    )
+    stru.add_argument("--input", required=True)
+    stru.add_argument("--output", required=True)
+    stru.add_argument("--dry-run", action="store_true")
+    stru.set_defaults(func=cmd_local_structure)
+
+    lyr = loc_sub.add_parser("lyrics", help="transcribe with Whisper")
+    lyr.add_argument("--input", required=True)
+    lyr.add_argument("--output", required=True)
+    lyr.add_argument("--model", default="small")
+    lyr.add_argument("--language")
+    lyr.add_argument("--dry-run", action="store_true")
+    lyr.set_defaults(func=cmd_local_lyrics)
+
     mai = sub.add_parser("music-ai", help="Music.AI workflows")
     mai_sub = mai.add_subparsers(dest="subcommand", required=True)
     mai_sub.add_parser("application", help="account + workflow list").set_defaults(
@@ -323,6 +463,27 @@ def build_parser():
         if extra:
             node.add_argument("--voice-model", required=True)
         node.set_defaults(func=handler)
+
+    moi = sub.add_parser("moises", help="Moises GraphQL API (self-serve door)")
+    moi_sub = moi.add_subparsers(dest="subcommand", required=True)
+    moi_sub.add_parser(
+        "auth", help="detect which auth scheme your key uses"
+    ).set_defaults(func=cmd_moises_auth)
+    intro = moi_sub.add_parser(
+        "introspect", help="dump the live GraphQL schema (no guessing)"
+    )
+    intro.add_argument("--contains", help="filter operations by substring")
+    intro.add_argument("--json", action="store_true", help="raw JSON instead of text")
+    intro.add_argument(
+        "--detect-auth",
+        action="store_true",
+        help="try both auth schemes first",
+    )
+    intro.set_defaults(func=cmd_moises_introspect)
+    q = moi_sub.add_parser("query", help="run a raw GraphQL operation ('-' for stdin)")
+    q.add_argument("query")
+    q.add_argument("--variables", help="JSON object of variables")
+    q.set_defaults(func=cmd_moises_query)
 
     suno = sub.add_parser("suno", help="Suno (disabled until configured)")
     suno_sub = suno.add_subparsers(dest="subcommand", required=True)

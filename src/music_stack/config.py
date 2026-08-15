@@ -89,6 +89,9 @@ class Settings:
 
     #: Environment variable names, grouped by the service that needs them.
     SERVICES = {
+        # Moises is the self-serve door to this engine; Music.AI is the same
+        # company's enterprise-gated REST platform. Either key works on its own.
+        "moises": ("MOISES_API_KEY",),
         "music-ai": ("MUSIC_AI_API_KEY",),
         "kits": ("KITS_API_KEY",),
         # Suno needs both a key *and* an explicitly confirmed base URL before

@@ -4,21 +4,52 @@ Pricing and limits change; treat every number here as "check the dashboard".
 What does not change is the *shape* of each relationship, which is what this
 page is really about.
 
-## Music.AI
+## Moises — the door that is actually open
 
-- **What it gives you**: workflow-based analysis and separation — chords, key,
-  tempo, lyric transcription, stems — as asynchronous jobs.
-- **Auth**: `Authorization: <key>`, the raw key. No `Bearer`.
-- **Billing**: developer credits, bought up front.
-- **The trap**: Music.AI developer billing and a consumer **Moises**
-  subscription are separate products from the same company. A Moises Premium
-  subscription does **not** imply API credits. Assume they are separate until
-  your own dashboard shows otherwise.
-- **Workflows are account-specific.** There is no universal slug list. Always
-  run `music-stack music-ai workflows` before writing a `--workflow` value;
-  copying a slug out of a blog post will fail.
+Moises and Music.AI are one company (Moises Systems) running one engine.
+Moises is the consumer/self-serve side; Music.AI is the enterprise platform.
 
-Start by buying the smallest credit pack that lets you process one short demo.
+**For an individual, Moises is the only reachable door.** Music.AI's login page
+offers no self-serve signup — the sole call to action is "Get Enterprise
+access", and their Contact Sales page explicitly redirects musicians and
+producers to moises.ai. Third-party articles still describe a Music.AI free
+tier; that is stale.
+
+- **What it gives you**: the same stem separation, chord/key/tempo detection,
+  and lyric transcription that powers the Moises app.
+- **Cost**: Pro is around $9.99/month and is the tier that includes API access.
+- **Getting the key**: developer account → **create an Application** → the key
+  is on the Application. It is not in ordinary account settings.
+- **Protocol**: **GraphQL**, one endpoint — `https://api.moises.ai/graphql`.
+  Not REST.
+- **Auth**: the key goes in the `Authorization` header. Published sources do
+  not agree on whether it is bare or `Bearer`-prefixed, so run
+  `music-stack moises auth` — it tries both and tells you which the server
+  accepts.
+
+Because the schema sits behind a login, this repo ships **no guessed queries**.
+Run:
+
+```bash
+music-stack moises introspect
+```
+
+GraphQL servers describe themselves, so this returns the real operations,
+arguments, and return types straight from Moises. Write queries from that
+output — never from a blog post or an unofficial wrapper.
+
+## Music.AI — enterprise only
+
+Same engine, REST instead of GraphQL, at `api.music.ai`. The adapter is built
+and tested and works unchanged **if** you are granted enterprise access. Auth
+is `Authorization: <key>` with the raw key — no `Bearer`.
+
+- **Workflows are account-specific.** No universal slug list. Always run
+  `music-stack music-ai workflows` before writing a `--workflow` value.
+- **Billing**: prepaid developer credits, quoted by sales.
+
+Ignore this unless enterprise access comes through. A Moises subscription does
+**not** grant Music.AI API credits — same company, separate ledgers.
 
 ## Kits AI (Arpeggi Labs)
 
