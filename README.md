@@ -1,158 +1,192 @@
 # music-stack
 
-A programmable songwriting pipeline: take a rough demo, get it to a clean
-lossless working copy, then run it through **Music.AI** (analysis, stems) and
-**Kits AI** (vocal separation, stem splitting, voice conversion) from one
-command line, with every output filed into a per-song project folder.
+Drop in a rough demo — an iPhone voice memo, a phone video, a scratch take —
+and get back what you need to finish the song: tempo, the arrangement you
+actually played, separated stems, the lyric as sung, the notes in that lick,
+chord shapes, and sheet music.
+
+**Runs on your machine. Nothing is uploaded.**
+
+```bash
+music-stack analyze --input ~/Downloads/vm0043.m4a
+```
+
+That is the whole workflow. One command.
+
+## What comes out
+
+`projects/<slug>/brief.md`:
+
+```markdown
+# Kaimana Nights
+
+**Source** · alac · 48000 Hz · 1 ch · 1:14
+
+## Structure
+- **Tempo** — 84 BPM
+- **Arrangement** — intro → verse → chorus → verse
+
+| Section | Start | Length |
+|---|---|---|
+| intro  | 0:00 | 6.5s  |
+| verse  | 0:06 | 24.5s |
+| chorus | 0:31 | 21.0s |
+
+**Not present yet:** bridge, outro
+
+## Lyrics as sung
+*Transcribed from the isolated vocal stem.*
+    walking down to the water line
+    thinking how the summer went by
+
+## To finish this
+- No bridge. Where would the song benefit from leaving the loop — and what
+  does it need to say there that the verses don't?
+- It runs 74s. That's a sketch, not an arrangement — which section wants
+  extending first?
+```
+
+Plus, on disk:
 
 ```
-demo.m4a ──► normalize ──► 48kHz/24-bit WAV ──┬──► Music.AI  ──► chords / key / stems
-                                              ├──► Kits AI   ──► isolated vocal / stems
-                                              └──► harmonies ──► (manual Kits export)
+projects/kaimana-nights/
+├── input/          your original, never modified
+├── normalized/     lossless 48k/24-bit working copy
+├── analysis/       tempo, beats, labelled sections (JSON)
+├── stems/local/    vocals, drums, bass, other
+├── notes/lyrics/   transcript as .txt/.json/.srt
+├── brief.md        ← the thing to read
+└── brief.json      the same, machine-readable
 ```
+
+Paste `brief.md` into a chat and you are working on the song, not the tooling.
 
 ## Install
 
-Requires **Python 3.9+** and **ffmpeg**. On a Mac with Homebrew already
-installed, one command does everything:
+Requires **Python 3.9+** and **ffmpeg**.
 
 ```bash
-./scripts/bootstrap-macos.sh
-```
-
-It installs ffmpeg, creates `.venv`, installs this package, writes a private
-`.env` from the template, and runs the test suite. It will **not** silently run
-Homebrew's remote installer — if Homebrew is missing it stops and says so.
-
-Doing it by hand is three lines:
-
-```bash
-brew install ffmpeg python@3.13
+git clone <this repo> ~/code/music && cd ~/code/music
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-```
-
-### No dependencies, deliberately
-
-`pip install -e .` pulls **nothing** from PyPI. Every HTTP call, multipart
-body, and poll loop in this package is Python standard library. That is a
-design decision, not an omission — see [docs/architecture.md](docs/architecture.md).
-It means the install cannot break because an upstream release was yanked,
-renamed, or pinned to an alpha that vanished.
-
-The official vendor SDKs remain available as an *optional* extra
-(`pip install -e '.[vendor]'`) if you want to script against their own
-abstractions. Nothing in this CLI imports them.
-
-## Configure
-
-```bash
-cp .env.example .env      # bootstrap does this for you
-$EDITOR .env              # paste your keys
-source .venv/bin/activate
 music-stack doctor
 ```
 
-`doctor` reports which credentials are **present** and a short non-reversible
-fingerprint of each. It never prints a key, and neither does any other command.
+`pip install -e .` pulls **nothing** from PyPI — the package is standard
+library only. That is deliberate: the install cannot break because an upstream
+release was yanked or pinned to an alpha that vanished. See
+[docs/architecture.md](docs/architecture.md).
 
-```
-Credentials (presence only; values are never displayed)
-  music-ai  MUSIC_AI_API_KEY   configured   305fd8a4
-  kits      KITS_API_KEY       missing      —
-```
+On a Mac with Homebrew, `./scripts/bootstrap-macos.sh` does all of the above
+plus ffmpeg.
 
-Suggested order for opening accounts — cheapest mistake first:
+## Optional tools — each adds a section to the brief
 
-1. **Music.AI** — buy the minimum credits and process one short demo.
-2. **Kits** — API access, plus whichever app tier allows harmony exports.
-3. **Suno** — last, and only once you can read its authenticated API schema.
+None required. `music-stack local doctor` shows what you have and how to get
+the rest.
 
-`./scripts/open-account-pages-macos.sh` opens all of the signup pages.
+| Install | Adds |
+|---|---|
+| `brew install ffmpeg` | conversion, trimming — **the only real requirement** |
+| `pip install -U demucs` | stem separation |
+| `pip install -U basic-pitch` | notes and chords |
+| `pip install -U openai-whisper` | lyric transcription |
+| allin1 (see `local doctor`) | tempo, beats, labelled sections |
 
-> Music.AI *developer* billing and a consumer Moises subscription are separate
-> products. Assume they do not share credits unless your own dashboard says so.
+Already have a Whisper? It finds `mlx_whisper`, `whisper-cli`, `whisper-cpp`,
+or `whisper` and adapts — no need to install another.
 
-## First song
+If Demucs is present, lyrics are transcribed from the **isolated vocal stem**
+rather than the full mix, which is markedly more accurate.
 
-```bash
-music-stack project new "Working Title"
-cp ~/Desktop/demo.m4a projects/working-title/input/
-
-music-stack audio normalize \
-  projects/working-title/input/demo.m4a \
-  projects/working-title/normalized/demo-48k-24bit.wav
-```
-
-Look before you spend. Workflow slugs are **account-specific**, so list yours
-first — this call costs nothing:
+## Working out a lick
 
 ```bash
-music-stack music-ai workflows --contains stem
-music-stack music-ai workflows --contains chord
+music-stack lick --input demo.m4a --start 1:23 --end 1:31
 ```
 
-Then run one:
+```
+Notes (7): G4 F4 E4 Eb4 D4 C4 A3
+Shape: descending over 10 semitones
+
+Tab (high three strings, standard tuning):
+e|-3----1----0-----------------------|
+B|----------------4----3----1--------|
+G|-------------------------------2---|
+
+Most likely scale:
+  A   blues (minor)      explains 86% of the notes
+  C   blues (major)      explains 86% of the notes
+```
+
+Chords work too — `basic-pitch` is polyphonic:
+
+```
+Progression: C Am F G
+
+Tab:
+e|-0------0------1------3-----|
+B|-1------1------1------0-----|
+G|-0------2------2------0-----|
+D|-2------2------3------0-----|
+A|-3------0-------------2-----|
+E|----------------------3-----|
+
+  0.00s  C    C3 E3 G3 C4 E4    x32010
+  1.00s  Am   A2 E3 A3 C4 E4    x02210
+```
+
+With chord boxes for each shape. **Trim tightly** — four seconds transcribes
+far better than four minutes. If the part is buried, `--isolate other` pulls
+the guitar out first.
+
+### Sheet music
 
 ```bash
-music-stack music-ai process \
-  --workflow 'the-slug-you-just-saw' \
-  --input  projects/working-title/normalized/demo-48k-24bit.wav \
-  --output projects/working-title/analysis/music-ai/first-pass
+music-stack lick --input demo.m4a --start 1:23 --end 1:31 --musicxml --bpm 92
 ```
 
-Kits:
+Writes a `.musicxml` that **MuseScore** (free), Guitar Pro, Dorico, and
+Sibelius all open — engraved notation with chord symbols. Add a tab staff in
+the editor for notation and tab together.
 
-```bash
-music-stack kits models
-music-stack kits vocals \
-  --input  projects/working-title/normalized/demo-48k-24bit.wav \
-  --output projects/working-title/stems/kits/vocals
-```
-
-Harmony auditioning stays manual on purpose: Kits' published API index covers
-voice conversion, voice models, separation and splitting — but **not** the
-interactive Harmony Generator. Upload the isolated lead vocal in the Kits web
-app and export takes into `projects/<slug>/harmonies/manual-kits/`. Pretending
-voice conversion is the same feature would produce quietly wrong results.
+The MIDI `basic-pitch` writes also opens in MuseScore with no extra flag, and
+keeps raw timing. Prefer it when rhythm matters: MusicXML export quantises to a
+sixteenth grid, so swing and rubato notate squarer than you played.
 
 ## Commands
 
-| Command | What it does | Costs credits |
+| Command | Does | Costs |
 |---|---|---|
-| `doctor` | local tools + credential presence | no |
-| `project new/list` | song folder scaffolding | no |
-| `audio normalize/inspect` | local ffmpeg conversion + ffprobe | no |
-| `local doctor` | which analysis tools are installed | no |
-| `local stems` | Demucs separation, on your machine | no |
-| `local structure` | allin1 — tempo, beats, labelled sections | no |
-| `local lyrics` | Whisper transcription | no |
-| `music-ai workflows` | list your account's workflows | no |
-| `music-ai process` | upload → run → download | **yes** |
-| `music-ai job <id>` | fetch one job's status | no |
-| `kits models` | list voice models | no |
-| `kits vocals / stems / convert` | Kits jobs | **yes** |
-| `suno status` | report why Suno is disabled | no |
+| `analyze --input F` | **everything, one pass** | free |
+| `lick --input F --start T --end T` | notes, chords, tab, scale, score | free |
+| `doctor` / `local doctor` | what is installed and configured | free |
+| `project new/list` | song folders | free |
+| `audio normalize/inspect` | conversion, ffprobe summary | free |
+| `local stems/structure/lyrics/notes` | run one stage on its own | free |
+| `music-ai *` | Music.AI REST — **enterprise only** | credits |
+| `kits *` | Kits AI — self-serve signup exists | credits |
+| `moises auth/introspect/query` | Moises GraphQL (legacy) | plan |
+| `suno status` | reports why Suno is off | free |
 
-Read-only commands are kept separate from spending ones so you can always look
-before you pay.
+`--dry-run` on any local command prints the exact argv without running it.
 
-## Project layout
+## About the hosted services
 
-Every song gets the same tree, so a file's provenance is obvious from its path:
+Worth knowing before you go shopping — all verified by probing the live sites:
 
-```
-projects/<slug>/
-├── input/                 originals, never written to again
-├── normalized/            lossless 48k/24-bit working copies
-├── analysis/music-ai/     chords, key, tempo, lyrics
-├── stems/music-ai/
-├── stems/kits/
-├── harmonies/manual-kits/ hand-exported from the Kits web app
-├── renders/               bounces and mixes
-├── notes/
-└── project.json           job audit trail: service, workflow, job id, time
-```
+- **Music.AI has no self-serve signup.** Its login page offers only "Get
+  Enterprise access"; Contact Sales redirects individuals to moises.ai.
+  Articles describing a free tier are stale. The adapter is built and correct,
+  just dormant.
+- **No Moises consumer plan grants an API key** — not Free, Premium, or Pro.
+  Don't buy Pro expecting one.
+- **Kits AI** does have real self-serve signup, including a free tier.
+- **Suno** ships inert by design — no guessed endpoints.
+
+The local path is not a consolation prize. Demucs is the model family Moises'
+own separation is built on, and you keep your unreleased demos on your own
+disk.
 
 ## Tests
 
@@ -160,54 +194,21 @@ projects/<slug>/
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-71 tests, no network, no credentials required. The ffmpeg round-trip tests skip
-themselves when ffmpeg is absent, so the suite is green on a fresh checkout and
-gains 5 more tests once you have bootstrapped.
+209 tests, no network, no credentials. Five ffmpeg round-trips skip themselves
+when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
+runs 214.
 
-## The hosted APIs are mostly gated — run it locally instead
-
-Worth knowing before you shop for an account:
-
-- **Music.AI** has no self-serve signup. Its login page offers only "Get
-  Enterprise access", and its Contact Sales page redirects individuals to
-  moises.ai. Articles describing a Music.AI free tier are stale.
-- **No Moises consumer plan grants an API key** — not Free, not Premium, not
-  Pro. API billing lives on Music.AI, separately. Don't buy Pro expecting one.
-- **Kits AI** does have genuine self-serve signup, including a free tier.
-
-So the `local` commands are the primary path, and they're better anyway: no
-account, no per-minute billing, and your unreleased demos never leave the Mac.
-Demucs is the model family Moises' own separation is built on.
-
-```bash
-music-stack local doctor        # what's installed, what to install
-pip install -U demucs          # stems
-pip install -U openai-whisper  # lyrics
-```
-
-Every `local` command takes `--dry-run`, which prints the exact argv without
-running it — check the command before committing to a long job.
-
-## Status of each integration
-
-Honesty about what has been *exercised* versus what is *written to spec*:
-
-| Integration | State |
-|---|---|
-| ffmpeg normalize / inspect | written to spec; round-trip tests run wherever ffmpeg exists |
-| Music.AI | endpoints, auth scheme and job lifecycle match the published REST reference; exercised end-to-end against a mock, **not** against the live API |
-| Kits — voice models, voice conversion | paths confirmed against Kits' published reference; mock-tested |
-| Kits — vocal separation, stem splitting | paths follow the documented naming pattern but were **not** readable at build time; flagged `verified=False` in `ENDPOINTS` and reported by `doctor` |
-| Suno | intentionally inert — no endpoint is guessed |
-
-No live API call has been made from this repository. The first real request
-will be yours, and `music-ai workflows` is the cheapest place to make it.
+The hosted-service tests are fully mocked — they verify this code's logic, not
+vendor behaviour. **No live API call has ever been made from this repository.**
 
 ## Documentation
 
-- [architecture.md](docs/architecture.md) — how it fits together and why zero-dependency
-- [workflow.md](docs/workflow.md) — the songwriting pipeline end to end
-- [security.md](docs/security.md) — credential handling and the storage boundary
-- [services-and-costs.md](docs/services-and-costs.md) — accounts, billing, limits
-- [troubleshooting.md](docs/troubleshooting.md) — failures and their fixes
-- [roadmap.md](docs/roadmap.md) — what is deliberately not built yet
+- [CLAUDE.md](CLAUDE.md) — orientation for an agent with no context. Start here
+  if you are one.
+- [docs/workflow.md](docs/workflow.md) — the pipeline end to end
+- [docs/architecture.md](docs/architecture.md) — why zero-dependency, and the
+  credential boundary
+- [docs/troubleshooting.md](docs/troubleshooting.md) — failures and fixes
+- [docs/services-and-costs.md](docs/services-and-costs.md) — what is gated
+- [docs/security.md](docs/security.md) — credentials and what leaves the machine
+- [docs/roadmap.md](docs/roadmap.md) — what is deliberately not built

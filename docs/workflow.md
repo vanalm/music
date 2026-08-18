@@ -1,5 +1,17 @@
 # The songwriting workflow
 
+## The short version
+
+```bash
+music-stack analyze --input ~/Downloads/vm0043.m4a
+```
+
+One command runs every stage this machine supports, skips the rest, and writes
+`projects/<slug>/brief.md`. The rest of this page is what it does underneath,
+and how to run each stage on its own when you want control.
+
+## The long version
+
 The pipeline assumes one input — a rough demo, phone voice memo, or scratch
 take — and walks it to the point where you have clean stems, harmony guides,
 and a chord/lyric map to write against.
