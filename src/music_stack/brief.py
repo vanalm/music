@@ -126,6 +126,21 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
         json.dumps(_serialisable(result), indent=2) + "\n", encoding="utf-8"
     )
     result["brief_path"] = str(brief_path)
+
+    # The visual surface: one self-contained HTML file. Never fatal -- a
+    # report failure must not throw away a finished analysis.
+    try:
+        from . import report as report_mod
+
+        html_out = report_mod.build(
+            _serialisable(result),
+            audio_path=str(working) if working.exists() else None,
+        )
+        report_path = project_dir / "report.html"
+        report_path.write_text(html_out, encoding="utf-8")
+        result["report_path"] = str(report_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        log("report generation failed: {}".format(exc))
     projects.record_job(
         project_dir,
         {

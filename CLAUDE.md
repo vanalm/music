@@ -22,7 +22,10 @@ music-stack analyze --input ~/Downloads/vm0043.m4a
 Scaffolds a project, preserves the original, transcodes a lossless working
 copy, runs every analysis stage the machine supports, silently skips the rest,
 and writes `projects/<slug>/brief.md` — a one-page songwriting brief with
-tempo, arrangement, missing sections, lyrics, and derived questions.
+tempo, arrangement, missing sections, lyrics, and derived questions — plus
+`report.html`, a self-contained visual version with a section-marked audio
+player. The report embeds a compact AAC preview as a data URI when ffmpeg is
+present and small enough; otherwise it degrades to a relative src and says so.
 
 A machine with only ffmpeg still produces a brief. Each optional tool installed
 adds a section.
@@ -34,6 +37,7 @@ adds a section.
 | `doctor` | — | free |
 | `local doctor` | — | free |
 | `analyze --input F` | ffmpeg; more tools = more sections | free |
+| `report <slug>` | a prior `analyze` run | free |
 | `project new/list` | — | free |
 | `audio normalize/inspect` | ffmpeg | free |
 | `lick --input F --start T --end T` | ffmpeg + basic-pitch | free |
@@ -153,6 +157,7 @@ and the fixture together.
 | `src/music_stack/notes.py` | pitch naming, fretboard, scale matching |
 | `src/music_stack/chords.py` | grouping, chord naming, voicings, diagrams |
 | `src/music_stack/musicxml.py` | sheet-music export |
+| `src/music_stack/report.py` | the self-contained HTML report |
 | `src/music_stack/http.py` | the credential boundary |
 | `docs/architecture.md` | why zero-dependency, how the boundary works |
 | `docs/workflow.md` | the songwriting pipeline end to end |

@@ -56,8 +56,15 @@ projects/kaimana-nights/
 ├── stems/local/    vocals, drums, bass, other
 ├── notes/lyrics/   transcript as .txt/.json/.srt
 ├── brief.md        ← the thing to read
-└── brief.json      the same, machine-readable
+├── brief.json      the same, machine-readable
+└── report.html     ← the thing to LOOK at — double-click it
 ```
+
+`report.html` is the visual version: an audio player whose timeline is the
+song's actual sections (click the chorus to jump there), the structure table,
+lyrics, chord boxes, and stem links. One self-contained file — no server, no
+install — so you can mail it to a bandmate. Regenerate any time with
+`music-stack report <slug>`.
 
 Paste `brief.md` into a chat and you are working on the song, not the tooling.
 
@@ -159,6 +166,7 @@ sixteenth grid, so swing and rubato notate squarer than you played.
 | Command | Does | Costs |
 |---|---|---|
 | `analyze --input F` | **everything, one pass** | free |
+| `report <slug>` | regenerate a project's report.html | free |
 | `lick --input F --start T --end T` | notes, chords, tab, scale, score | free |
 | `doctor` / `local doctor` | what is installed and configured | free |
 | `project new/list` | song folders | free |
