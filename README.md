@@ -68,12 +68,6 @@ install — so you can mail it to a bandmate. Regenerate any time with
 
 Paste `brief.md` into a chat and you are working on the song, not the tooling.
 
-**There's also `report.html`** — a self-contained page that opens with a
-double-click: an audio player wired to a clickable section timeline with a
-live playhead, the lyric, stems, chord boxes, and the questions. One file, no
-server, no network, dark-mode aware. Regenerate it any time with
-`music-stack report <slug>`.
-
 ## Install
 
 Requires **Python 3.9+** and **ffmpeg**.
@@ -208,9 +202,9 @@ disk.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-209 tests, no network, no credentials. Five ffmpeg round-trips skip themselves
+225 tests, no network, no credentials. Five ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 214.
+runs 230.
 
 The hosted-service tests are fully mocked — they verify this code's logic, not
 vendor behaviour. **No live API call has ever been made from this repository.**
