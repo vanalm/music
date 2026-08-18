@@ -13,6 +13,18 @@ music-stack analyze --input ~/Downloads/vm0043.m4a
 
 That is the whole workflow. One command.
 
+Or no command at all — start the drop folder once:
+
+```bash
+music-stack watch
+```
+
+then **drag voice memos into `dropbox/` from Finder** (or AirDrop straight
+into it). Each file is analyzed into `projects/<slug>/` and the original is
+filed under `dropbox/done/`. Files that fail move to `dropbox/failed/` with
+the reason printed, and a file still copying in is left alone until its bytes
+have finished arriving.
+
 ## What comes out
 
 `projects/<slug>/brief.md`:
@@ -166,6 +178,7 @@ sixteenth grid, so swing and rubato notate squarer than you played.
 | Command | Does | Costs |
 |---|---|---|
 | `analyze --input F` | **everything, one pass** | free |
+| `watch` | drop folder — drag files in from Finder | free |
 | `report <slug>` | regenerate a project's report.html | free |
 | `lick --input F --start T --end T` | notes, chords, tab, scale, score | free |
 | `doctor` / `local doctor` | what is installed and configured | free |

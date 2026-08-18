@@ -37,6 +37,7 @@ adds a section.
 | `doctor` | — | free |
 | `local doctor` | — | free |
 | `analyze --input F` | ffmpeg; more tools = more sections | free |
+| `watch [--once]` | polls `dropbox/`, analyzes drops, files to done/failed | free |
 | `report <slug>` | a prior `analyze` run | free |
 | `project new/list` | — | free |
 | `audio normalize/inspect` | ffmpeg | free |

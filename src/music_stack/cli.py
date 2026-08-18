@@ -130,6 +130,26 @@ def cmd_analyze(args, settings):
     return 0
 
 
+# -- watch ----------------------------------------------------------------
+
+
+def cmd_watch(args, settings):
+    """Drop-folder mode: drag files in from Finder, projects come out."""
+    from . import watch as watch_mod
+
+    drop_dir = Path(args.dir or (settings.root / "dropbox"))
+    if args.once:
+        drop_dir.mkdir(parents=True, exist_ok=True)
+        results = watch_mod.run_once(drop_dir, settings.projects_dir)
+        if not results:
+            print("nothing to process in {}".format(drop_dir))
+        return 0
+    watch_mod.run_forever(
+        drop_dir, settings.projects_dir, interval=args.interval
+    )
+    return 0
+
+
 # -- report ---------------------------------------------------------------
 
 
@@ -576,6 +596,15 @@ def build_parser():
     insp.add_argument("path")
     insp.add_argument("--full", action="store_true", help="full ffprobe JSON")
     insp.set_defaults(func=cmd_audio_inspect)
+
+    wat = sub.add_parser(
+        "watch", help="drop folder: drag audio in from Finder, get projects out"
+    )
+    wat.add_argument("--dir", help="folder to watch (default: ./dropbox)")
+    wat.add_argument("--interval", type=float, default=3.0)
+    wat.add_argument("--once", action="store_true",
+                     help="process what's there now, then exit")
+    wat.set_defaults(func=cmd_watch)
 
     rep = sub.add_parser("report", help="regenerate a project's brief.html")
     rep.add_argument("slug", help="project folder name under projects/")
