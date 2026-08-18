@@ -130,38 +130,25 @@ def cmd_analyze(args, settings):
     return 0
 
 
+# -- report ---------------------------------------------------------------
+
+
 def cmd_report(args, settings):
-    """Regenerate a project's report.html from its saved brief.json."""
+    """Regenerate brief.html for a project from its saved brief.json."""
     from . import report as report_mod
 
-    project_dir = settings.projects_dir / args.project
-    brief_json = project_dir / "brief.json"
-    if not brief_json.exists():
+    project_dir = settings.projects_dir / args.slug
+    data_path = project_dir / "brief.json"
+    if not data_path.exists():
         print(
-            "error: {} has no brief.json — run `music-stack analyze` first".format(
-                args.project
-            ),
-            file=sys.stderr,
+            "error: {} has no brief.json — run `music-stack analyze` on it "
+            "first.".format(args.slug), file=sys.stderr,
         )
         return 2
-    data = json.loads(brief_json.read_text(encoding="utf-8"))
-
-    audio_path = None
-    normalized = (data.get("stages", {}).get("normalize") or {}).get("file")
-    if normalized and Path(normalized).exists():
-        audio_path = normalized
-    elif data.get("input") and Path(data["input"]).exists():
-        audio_path = data["input"]
-
-    chords_payload = None
-    lick_json = sorted(project_dir.glob("*-lick.json"))
-    if lick_json:
-        lick_data = json.loads(lick_json[-1].read_text(encoding="utf-8"))
-        chords_payload = lick_data.get("chords")
-
-    html_out = report_mod.build(data, audio_path=audio_path, chords=chords_payload)
-    out = project_dir / "report.html"
-    out.write_text(html_out, encoding="utf-8")
+    result = json.loads(data_path.read_text(encoding="utf-8"))
+    norm = (result.get("stages") or {}).get("normalize") or {}
+    audio_path = norm.get("file") or (norm.get("summary") or {}).get("path")
+    out = report_mod.write(result, project_dir, audio_path=audio_path)
     print("Wrote {}".format(out))
     return 0
 
@@ -566,12 +553,6 @@ def build_parser():
     ana.add_argument("--dry-run", action="store_true", help="plan only, run nothing")
     ana.set_defaults(func=cmd_analyze)
 
-    rep = sub.add_parser(
-        "report", help="regenerate a project's report.html from its brief"
-    )
-    rep.add_argument("project", help="project slug (see `project list`)")
-    rep.set_defaults(func=cmd_report)
-
     project = sub.add_parser("project", help="song project directories")
     project_sub = project.add_subparsers(dest="subcommand", required=True)
     new = project_sub.add_parser("new", help="create a project tree")
@@ -595,6 +576,10 @@ def build_parser():
     insp.add_argument("path")
     insp.add_argument("--full", action="store_true", help="full ffprobe JSON")
     insp.set_defaults(func=cmd_audio_inspect)
+
+    rep = sub.add_parser("report", help="regenerate a project's brief.html")
+    rep.add_argument("slug", help="project folder name under projects/")
+    rep.set_defaults(func=cmd_report)
 
     lick = sub.add_parser(
         "lick", help="what notes are in this phrase? (trim, transcribe, tab)"

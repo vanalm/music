@@ -132,13 +132,9 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
     try:
         from . import report as report_mod
 
-        html_out = report_mod.build(
-            _serialisable(result),
-            audio_path=str(working) if working.exists() else None,
+        result["report_path"] = str(
+            report_mod.write(result, project_dir, audio_path=working)
         )
-        report_path = project_dir / "report.html"
-        report_path.write_text(html_out, encoding="utf-8")
-        result["report_path"] = str(report_path)
     except Exception as exc:  # pragma: no cover - defensive
         log("report generation failed: {}".format(exc))
     projects.record_job(

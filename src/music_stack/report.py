@@ -1,440 +1,401 @@
-"""A single-file HTML report — the visual surface for a project.
+"""A self-contained HTML report — the closest thing this tool has to a UI.
 
-Everything else in this package writes to a terminal or to disk. This writes
-one `.html` file you double-click: an audio player whose timeline is divided
-into the song's actual sections, so clicking "chorus" jumps there; the lyric
-as sung; chord shapes drawn as real diagrams; and links to the stems.
+``analyze`` writes ``report.html`` next to ``brief.md``. Double-click it and
+the browser shows the song: an audio player wired to a clickable section
+timeline with a live playhead, the lyric as sung, stems, chord shapes as SVG
+boxes, and the questions.
 
-**Self-contained on purpose.** No server, no CDN, no build step. The audio is
-transcoded to a compact AAC preview and embedded as a data URI, so the file can
-be mailed to a bandmate and still work. If ffmpeg is unavailable or the result
-would be too large, it degrades to a relative `src` — which works when the HTML
-sits beside the audio, and says so rather than showing a silently dead player.
+Constraints, deliberately:
 
-Generated with string templates and stdlib only, consistent with the rest of
-the package having no dependencies.
+* **One file, zero dependencies.** Generated with the standard library — no
+  frameworks, no CDN, no network requests. It works on an aeroplane and never
+  breaks because a host moved.
+* **Audio stays on disk.** The player references the project's WAV by
+  *relative path*, so the page plays from inside its project folder and the
+  HTML itself stays small enough to share (minus the audio).
+* **Sparse analysis → sparse page, never a broken one.** Each section renders
+  from whatever the brief holds; a missing stage states how to get it.
 """
 
-import base64
-import html
-import json
-import subprocess
+import html as _html
+import os
 from pathlib import Path
 
-from . import audio as audio_mod
-
-#: Above this, embedding produces a file too unwieldy to open or mail.
-MAX_EMBED_BYTES = 24 * 1024 * 1024
-
-#: Preview encoding. Quality is irrelevant here -- this is for navigation and
-#: reference listening, not mixing.
-PREVIEW_BITRATE = "96k"
-
-#: Distinct hues per section type, so the timeline reads at a glance.
-SECTION_COLORS = {
-    "intro": "#7c8ea3", "verse": "#4f8fd6", "chorus": "#e0724e",
-    "bridge": "#9b6bc4", "solo": "#d4a03c", "inst": "#5aa88a",
-    "break": "#8a8f98", "outro": "#6b7d94", "start": "#8a8f98",
-    "end": "#8a8f98",
+#: Section label -> hue, so the timeline is scannable at a glance.
+_SECTION_HUES = {
+    "intro": 210, "verse": 150, "chorus": 345, "bridge": 45,
+    "solo": 280, "inst": 280, "break": 25, "outro": 265,
 }
-DEFAULT_COLOR = "#7f8794"
 
 
-def _esc(value):
-    return html.escape(str(value if value is not None else ""), quote=True)
+def _esc(text):
+    return _html.escape(str(text if text is not None else ""), quote=True)
 
 
-def preview_audio(path, *, max_bytes=MAX_EMBED_BYTES):
-    """Return ``(data_uri, note)`` for *path*, or ``(None, reason)``.
+def _clock(seconds):
+    seconds = int(float(seconds or 0))
+    return "{:d}:{:02d}".format(seconds // 60, seconds % 60)
 
-    Transcodes to AAC first: embedding a 24-bit WAV would produce a file
-    hundreds of megabytes wide once base64 inflates it by a third.
+
+# -- chord boxes -----------------------------------------------------------
+
+
+def chord_svg(positions, *, width=110, height=132):
+    """Draw a chord box as inline SVG from voice_chord() positions.
+
+    Strings are vertical lines (low E left), frets horizontal. Fretted notes
+    are dots, open strings circles above the nut, unused strings an ``x``.
     """
-    path = Path(path)
-    if not path.exists():
-        return None, "audio file not found"
-    if not audio_mod.which("ffmpeg"):
-        return None, "ffmpeg not installed, so no embedded preview"
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        out = Path(tmp) / "preview.m4a"
-        proc = subprocess.run(
-            [
-                audio_mod.which("ffmpeg"), "-hide_banner", "-loglevel", "error",
-                "-nostdin", "-y", "-i", str(path), "-vn",
-                "-c:a", "aac", "-b:a", PREVIEW_BITRATE, "-ar", "44100",
-                str(out),
-            ],
-            capture_output=True,
-        )
-        if proc.returncode != 0 or not out.exists():
-            return None, "ffmpeg could not make a preview"
-        raw = out.read_bytes()
-
-    if len(raw) > max_bytes:
-        return None, "preview is {:.0f} MB, too large to embed".format(
-            len(raw) / 1024 / 1024
-        )
-    return (
-        "data:audio/mp4;base64," + base64.b64encode(raw).decode("ascii"),
-        "embedded ({:.1f} MB)".format(len(raw) / 1024 / 1024),
-    )
-
-
-def chord_svg(positions, *, width=104, height=132):
-    """Draw a chord box as inline SVG. *positions* is a voicing's list."""
     by_string = {p["string"]: p["fret"] for p in positions}
-    fretted = [f for f in by_string.values() if f > 0]
-    start = min(fretted) if fretted and max(fretted) > 4 else 1
-    frets = 5
+    fretted = [f for f in by_string.values() if f and f > 0]
+    base = min(fretted) if fretted and min(fretted) > 1 else 1
+    n_frets = 5
 
-    left, top = 22, 26
-    cell_w = (width - left - 8) / 5.0
-    cell_h = (height - top - 16) / float(frets)
+    left, top, right, bottom = 18, 26, width - 12, height - 10
+    string_x = {
+        s: left + (right - left) * (6 - s) / 5.0 for s in range(1, 7)
+    }
+    fret_y = [
+        top + (bottom - top) * i / float(n_frets) for i in range(n_frets + 1)
+    ]
 
-    parts = ['<svg viewBox="0 0 {} {}" class="chord">'.format(width, height)]
-    # Six vertical string lines, low E on the left as a player looks down.
-    for i in range(6):
-        x = left + i * cell_w
+    parts = [
+        '<svg class="chordbox" viewBox="0 0 {w} {h}" '
+        'xmlns="http://www.w3.org/2000/svg">'.format(w=width, h=height)
+    ]
+    # nut or base-fret label
+    if base == 1:
         parts.append(
-            '<line x1="{x}" y1="{t}" x2="{x}" y2="{b}" class="grid"/>'.format(
-                x=x, t=top, b=top + frets * cell_h
+            '<line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" class="nut"/>'.format(
+                x1=left, x2=right, y=top
             )
         )
-    for j in range(frets + 1):
-        y = top + j * cell_h
-        cls = "nut" if (j == 0 and start == 1) else "grid"
+    else:
         parts.append(
-            '<line x1="{l}" y1="{y}" x2="{r}" y2="{y}" class="{c}"/>'.format(
-                l=left, r=left + 5 * cell_w, y=y, c=cls
+            '<text x="{x}" y="{y}" class="basefret">{n}fr</text>'.format(
+                x=right + 2, y=top + 12, n=base
             )
         )
-    if start > 1:
+    for y in fret_y:
         parts.append(
-            '<text x="{x}" y="{y}" class="fretno">{n}</text>'.format(
-                x=left - 8, y=top + cell_h * 0.7, n=start
-            )
+            '<line x1="{x1}" y1="{y:.1f}" x2="{x2}" y2="{y:.1f}" '
+            'class="fret"/>'.format(x1=left, x2=right, y=y)
         )
-
-    for index, string in enumerate(range(6, 0, -1)):
-        x = left + index * cell_w
-        fret = by_string.get(string)
+    for s, x in string_x.items():
+        parts.append(
+            '<line x1="{x:.1f}" y1="{y1}" x2="{x:.1f}" y2="{y2}" '
+            'class="string"/>'.format(x=x, y1=top, y2=bottom)
+        )
+    for s in range(6, 0, -1):
+        x = string_x[s]
+        fret = by_string.get(s)
         if fret is None:
             parts.append(
-                '<text x="{x}" y="{y}" class="mark">x</text>'.format(x=x, y=top - 8)
+                '<text x="{x:.1f}" y="{y}" class="mark">x</text>'.format(
+                    x=x, y=top - 8
+                )
             )
         elif fret == 0:
             parts.append(
-                '<circle cx="{x}" cy="{y}" r="4" class="open"/>'.format(
-                    x=x, y=top - 12
+                '<circle cx="{x:.1f}" cy="{y}" r="4.5" class="open"/>'.format(
+                    x=x, y=top - 11
                 )
             )
         else:
-            offset = fret - start
-            if 0 <= offset < frets:
-                parts.append(
-                    '<circle cx="{x}" cy="{y}" r="6.5" class="dot"/>'.format(
-                        x=x, y=top + (offset + 0.5) * cell_h
-                    )
-                )
+            row = fret - base
+            cy = (fret_y[row] + fret_y[row + 1]) / 2.0
+            parts.append(
+                '<circle cx="{x:.1f}" cy="{cy:.1f}" r="6.5" '
+                'class="dot"/>'.format(x=x, cy=cy)
+            )
     parts.append("</svg>")
     return "".join(parts)
 
 
-def build(data, *, audio_path=None, chords=None, title=None):
-    """Render the report. *data* is a ``brief.json`` payload."""
-    stages = data.get("stages") or {}
+# -- page ------------------------------------------------------------------
+
+
+def build(result, *, audio_path=None, chords=None):
+    """Render an ``analyze`` result (the ``brief.json`` shape) as one page."""
+    from . import brief as brief_mod
+
+    stages = result.get("stages") or {}
     structure = (stages.get("structure") or {}).get("summary") or {}
-    lyrics = (stages.get("lyrics") or {}).get("text") or ""
-    stems = (stages.get("stems") or {}).get("files") or []
-    source = (stages.get("normalize") or {}).get("summary") or {}
+    lyrics = stages.get("lyrics") or {}
+    stems = stages.get("stems") or {}
+    norm = (stages.get("normalize") or {}).get("summary") or {}
     sections = structure.get("sections") or []
-    title = title or data.get("title") or "Untitled"
+    duration = structure.get("duration_seconds") or norm.get("duration_seconds") or 0
 
-    src, audio_note = (None, "no audio")
+    # -- audio ------------------------------------------------------------
     if audio_path:
-        src, audio_note = preview_audio(audio_path)
-        if src is None:
-            # Fall back to a sibling path; honest about the caveat.
-            src = _esc(Path(audio_path).name)
+        # Relative name: report.html sits in the project dir, the normalized
+        # WAV one level down. If the exact relative path cannot be derived,
+        # the bare filename is still the best guess -- browsers resolve it
+        # against the page, and a wrong guess degrades to a silent player,
+        # not a broken page.
+        audio_src = os.path.basename(str(audio_path))
+        project = result.get("project")
+        if project:
+            try:
+                audio_src = str(Path(audio_path).relative_to(project))
+            except ValueError:
+                pass
+        audio_html = (
+            '<audio id="player" controls preload="metadata" src="{}"></audio>'
+        ).format(_esc(audio_src))
+    else:
+        audio_html = '<p class="note">No audio available for playback.</p>'
 
-    total = structure.get("duration_seconds") or source.get("duration_seconds") or 0
+    # -- timeline ---------------------------------------------------------
+    if sections and duration:
+        seg_parts = []
+        for s in sections:
+            width = 100.0 * float(s["seconds"]) / float(duration)
+            hue = _SECTION_HUES.get(str(s["label"]).lower(), 200)
+            seg_parts.append(
+                '<div class="seg" data-start="{start}" '
+                'style="width:{w:.3f}%;--hue:{h}" '
+                'title="{label} · {t0}–{t1}"><span>{label}</span></div>'.format(
+                    start=s["start"], w=width, h=hue, label=_esc(s["label"]),
+                    t0=_clock(s["start"]), t1=_clock(s["end"]),
+                )
+            )
+        timeline_html = (
+            '<div class="timeline" id="timeline">{segs}'
+            '<div id="playhead"></div></div>'.format(segs="".join(seg_parts))
+        )
+    else:
+        timeline_html = (
+            '<p class="note">No structure analysis yet — install allin1 '
+            "(<code>music-stack local doctor</code> has the steps) and re-run "
+            "<code>music-stack analyze</code>.</p>"
+            '<div style="display:none" id="playhead"></div>'
+        )
 
+    # -- facts ------------------------------------------------------------
     facts = []
     if structure.get("bpm"):
-        facts.append(("Tempo", "{} BPM".format(structure["bpm"])))
-    if total:
-        facts.append(("Length", "{:d}:{:02d}".format(int(total // 60), int(total % 60))))
-    if structure.get("section_count"):
-        facts.append(("Sections", structure["section_count"]))
-    if source.get("sample_rate"):
-        facts.append(
-            ("Source", "{} · {} Hz".format(source.get("codec", "?"),
-                                           source["sample_rate"]))
+        facts.append("<b>{}</b> BPM".format(_esc(structure["bpm"])))
+    if duration:
+        facts.append("<b>{}</b>".format(_clock(duration)))
+    if norm.get("codec"):
+        facts.append("{} · {} Hz".format(_esc(norm["codec"]),
+                                         _esc(norm.get("sample_rate", "?"))))
+    facts_html = " &nbsp;·&nbsp; ".join(facts)
+
+    missing = structure.get("missing") or []
+    missing_html = ""
+    if missing:
+        chips = "".join('<span class="chip">{}</span>'.format(_esc(m))
+                        for m in missing)
+        missing_html = '<p class="missing">Not present yet: {}</p>'.format(chips)
+
+    # -- lyrics -----------------------------------------------------------
+    lyrics_html = ""
+    if lyrics.get("text"):
+        provenance = (
+            "transcribed from the isolated vocal stem"
+            if lyrics.get("from_isolated_vocal")
+            else "transcribed from the full mix — expect errors where "
+                 "instruments mask the vocal"
+        )
+        lyrics_html = (
+            "<h2>Lyrics as sung</h2>"
+            '<p class="note">{}</p><pre class="lyrics">{}</pre>'.format(
+                _esc(provenance), _esc(lyrics["text"])
+            )
+        )
+
+    # -- stems ------------------------------------------------------------
+    stems_html = ""
+    stem_files = stems.get("files") or []
+    if stem_files:
+        items = "".join(
+            '<li><a href="{name}">{name}</a></li>'.format(
+                name=_esc(Path(f).name)
+            )
+            for f in stem_files
+        )
+        stems_html = '<h2>Stems</h2><ul class="stems">{}</ul>'.format(items)
+
+    # -- chords -----------------------------------------------------------
+    chords_html = ""
+    if chords:
+        seen, cards = set(), []
+        for c in chords:
+            shorthand = c.get("shorthand")
+            positions = c.get("positions")
+            if not shorthand or not positions or shorthand in seen:
+                continue
+            seen.add(shorthand)
+            cards.append(
+                '<figure class="card">{svg}<figcaption>{sym}'
+                "<small>{short}</small></figcaption></figure>".format(
+                    svg=chord_svg(positions),
+                    sym=_esc(c.get("symbol", "?")),
+                    short=_esc(shorthand),
+                )
+            )
+        if cards:
+            chords_html = (
+                "<h2>Chords</h2><div class=\"cards\">{}</div>".format(
+                    "".join(cards)
+                )
+            )
+
+    # -- questions --------------------------------------------------------
+    questions_html = "".join(
+        "<li>{}</li>".format(_esc(q)) for q in brief_mod.questions(result)
+    )
+
+    skipped = result.get("skipped") or []
+    skipped_html = ""
+    if skipped:
+        skipped_html = (
+            '<p class="note">Stages skipped (tool not installed): {}. Run '
+            "<code>music-stack local doctor</code>.</p>".format(
+                _esc(", ".join(skipped))
+            )
         )
 
     return _TEMPLATE.format(
-        title=_esc(title),
-        facts=_facts_html(facts),
-        player=_player_html(src, audio_note),
-        timeline=_timeline_html(sections, total),
-        sections=_sections_html(sections),
-        missing=_missing_html(structure.get("missing") or []),
-        lyrics=_lyrics_html(lyrics, (stages.get("lyrics") or {}).get(
-            "from_isolated_vocal")),
-        chords=_chords_html(chords or []),
-        stems=_stems_html(stems),
-        legend=_legend_html(sections),
+        title=_esc(result.get("title", "Untitled")),
+        facts=facts_html,
+        audio=audio_html,
+        timeline=timeline_html,
+        arrangement=_esc(structure.get("arrangement") or ""),
+        missing=missing_html,
+        lyrics=lyrics_html,
+        stems=stems_html,
+        chords=chords_html,
+        questions=questions_html,
+        skipped=skipped_html,
     )
 
 
-def _facts_html(facts):
-    if not facts:
-        return ""
-    return "".join(
-        '<div class="fact"><span class="k">{}</span>'
-        '<span class="v">{}</span></div>'.format(_esc(k), _esc(v))
-        for k, v in facts
+def write(result, project_dir, *, audio_path=None, chords=None):
+    """Write ``report.html`` into *project_dir*; returns its path."""
+    project_dir = Path(project_dir)
+    out = project_dir / "report.html"
+    out.write_text(
+        build(result, audio_path=audio_path, chords=chords), encoding="utf-8"
     )
+    return out
 
 
-def _player_html(src, note):
-    if not src:
-        return '<p class="muted">No audio available for this report.</p>'
-    return (
-        '<audio id="player" controls preload="metadata" src="{src}"></audio>'
-        '<p class="muted">{note}</p>'.format(src=src, note=_esc(note))
-    )
-
-
-def _timeline_html(sections, total):
-    if not sections or not total:
-        return '<p class="muted">No section analysis — install allin1 to get one.</p>'
-    blocks = []
-    for index, s in enumerate(sections):
-        left = 100.0 * s["start"] / total
-        width = max(0.4, 100.0 * s["seconds"] / total)
-        colour = SECTION_COLORS.get((s["label"] or "").lower(), DEFAULT_COLOR)
-        blocks.append(
-            '<button class="seg" style="left:{l:.3f}%;width:{w:.3f}%;'
-            'background:{c}" data-start="{start}" title="{label} — {clock}">'
-            "<span>{label}</span></button>".format(
-                l=left, w=width, c=colour, start=s["start"],
-                label=_esc(s["label"]), clock=_clock(s["start"]),
-            )
-        )
-    return (
-        '<div class="timeline" id="timeline">{blocks}'
-        '<div class="playhead" id="playhead"></div></div>'.format(
-            blocks="".join(blocks)
-        )
-    )
-
-
-def _legend_html(sections):
-    labels = []
-    for s in sections:
-        label = (s.get("label") or "").lower()
-        if label and label not in labels:
-            labels.append(label)
-    if not labels:
-        return ""
-    return "".join(
-        '<span class="lg"><i style="background:{c}"></i>{l}</span>'.format(
-            c=SECTION_COLORS.get(l, DEFAULT_COLOR), l=_esc(l)
-        )
-        for l in labels
-    )
-
-
-def _sections_html(sections):
-    if not sections:
-        return ""
-    rows = "".join(
-        '<tr class="row" data-start="{start}"><td><i style="background:{c}"></i>'
-        "{label}</td><td>{clock}</td><td>{secs}s</td></tr>".format(
-            start=s["start"],
-            c=SECTION_COLORS.get((s["label"] or "").lower(), DEFAULT_COLOR),
-            label=_esc(s["label"]), clock=_clock(s["start"]), secs=s["seconds"],
-        )
-        for s in sections
-    )
-    return (
-        "<table><thead><tr><th>Section</th><th>Start</th><th>Length</th>"
-        "</tr></thead><tbody>{}</tbody></table>".format(rows)
-    )
-
-
-def _missing_html(missing):
-    if not missing:
-        return ""
-    chips = "".join('<span class="chip">{}</span>'.format(_esc(m)) for m in missing)
-    return (
-        '<div class="missing"><strong>Not present yet</strong>{}</div>'.format(chips)
-    )
-
-
-def _lyrics_html(text, from_stem):
-    if not text:
-        return ""
-    note = (
-        "Transcribed from the isolated vocal stem."
-        if from_stem
-        else "Transcribed from the full mix — expect errors where instruments "
-        "mask the vocal."
-    )
-    return (
-        '<section><h2>Lyrics as sung</h2><p class="muted">{note}</p>'
-        "<pre>{text}</pre></section>".format(note=_esc(note), text=_esc(text))
-    )
-
-
-def _chords_html(chords):
-    if not chords:
-        return ""
-    seen, cards = set(), []
-    for c in chords:
-        shorthand = c.get("shorthand")
-        positions = c.get("positions")
-        symbol = c.get("symbol") or "?"
-        if not positions or shorthand in seen:
-            continue
-        seen.add(shorthand)
-        cards.append(
-            '<figure class="card"><figcaption>{sym}<code>{sh}</code>'
-            "</figcaption>{svg}</figure>".format(
-                sym=_esc(symbol), sh=_esc(shorthand), svg=chord_svg(positions)
-            )
-        )
-    if not cards:
-        return ""
-    progression = " ".join(
-        _esc(c.get("symbol") or "?") for c in chords
-    )
-    return (
-        "<section><h2>Chords</h2>"
-        '<p class="prog">{prog}</p><div class="cards">{cards}</div>'
-        "</section>".format(prog=progression, cards="".join(cards))
-    )
-
-
-def _stems_html(stems):
-    if not stems:
-        return ""
-    items = "".join(
-        '<li><a href="{href}">{name}</a></li>'.format(
-            href=_esc(Path(s).name), name=_esc(Path(s).stem)
-        )
-        for s in stems
-    )
-    return (
-        "<section><h2>Stems</h2><ul class=\"stems\">{}</ul>"
-        '<p class="muted">Links are relative — keep this file beside the stems, '
-        "or open them from the project folder.</p></section>".format(items)
-    )
-
-
-def _clock(seconds):
-    seconds = int(seconds or 0)
-    return "{:d}:{:02d}".format(seconds // 60, seconds % 60)
-
-
-_TEMPLATE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <style>
-:root{{--bg:#faf9f7;--fg:#1c1e21;--muted:#6b7280;--line:#e2e0dc;--card:#fff;
---accent:#4f8fd6}}
-@media(prefers-color-scheme:dark){{:root{{--bg:#16181c;--fg:#e8e6e3;
---muted:#9aa1ab;--line:#2c2f36;--card:#1e2126}}}}
-*{{box-sizing:border-box}}
-body{{margin:0;padding:2rem 1.25rem 4rem;background:var(--bg);color:var(--fg);
-font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
-main{{max-width:820px;margin:0 auto}}
-h1{{font-size:2.1rem;margin:0 0 .4rem;letter-spacing:-.02em}}
-h2{{font-size:1.05rem;text-transform:uppercase;letter-spacing:.08em;
-color:var(--muted);margin:2.5rem 0 .8rem;font-weight:600}}
-.facts{{display:flex;flex-wrap:wrap;gap:1.5rem;margin:0 0 1.75rem;
-padding-bottom:1.25rem;border-bottom:1px solid var(--line)}}
-.fact .k{{display:block;font-size:.72rem;text-transform:uppercase;
-letter-spacing:.07em;color:var(--muted)}}
-.fact .v{{font-size:1.15rem;font-variant-numeric:tabular-nums}}
-audio{{width:100%;margin:.5rem 0}}
-.timeline{{position:relative;height:52px;border-radius:8px;overflow:hidden;
-background:var(--line);margin:.75rem 0 .5rem}}
-.seg{{position:absolute;top:0;height:100%;border:0;cursor:pointer;padding:0;
-color:#fff;font:inherit;font-size:.72rem;opacity:.88;transition:opacity .12s}}
-.seg:hover{{opacity:1}}
-.seg span{{position:absolute;left:6px;top:50%;transform:translateY(-50%);
-white-space:nowrap;overflow:hidden;text-shadow:0 1px 2px rgba(0,0,0,.35)}}
-.playhead{{position:absolute;top:0;width:2px;height:100%;background:var(--fg);
-left:0;pointer-events:none;transition:left .1s linear}}
-.legend{{display:flex;gap:1rem;flex-wrap:wrap;font-size:.8rem;
-color:var(--muted)}}
-.lg i,td i{{display:inline-block;width:10px;height:10px;border-radius:2px;
-margin-right:.4rem;vertical-align:baseline}}
-table{{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}}
-th{{text-align:left;font-size:.72rem;text-transform:uppercase;
-letter-spacing:.06em;color:var(--muted);padding:.4rem 0}}
-td{{padding:.45rem 0;border-top:1px solid var(--line)}}
-tr.row{{cursor:pointer}}
-tr.row:hover td{{color:var(--accent)}}
-.missing{{margin-top:1rem;font-size:.9rem}}
-.chip{{display:inline-block;margin-left:.4rem;padding:.15rem .6rem;
-border:1px dashed var(--muted);border-radius:99px;font-size:.8rem;
-color:var(--muted)}}
-pre{{white-space:pre-wrap;background:var(--card);border:1px solid var(--line);
-border-radius:8px;padding:1rem;font:15px/1.7 ui-monospace,SFMono-Regular,
-Menlo,monospace}}
-.prog{{font:1.25rem ui-monospace,SFMono-Regular,Menlo,monospace;
-letter-spacing:.05em}}
-.cards{{display:flex;flex-wrap:wrap;gap:1rem}}
-.card{{margin:0;background:var(--card);border:1px solid var(--line);
-border-radius:10px;padding:.75rem}}
-figcaption{{font-weight:600;margin-bottom:.35rem;display:flex;gap:.5rem;
-align-items:baseline}}
-figcaption code{{font-size:.78rem;color:var(--muted)}}
-.chord{{width:104px;height:132px;display:block}}
-.chord .grid{{stroke:var(--muted);stroke-width:1;opacity:.55}}
-.chord .nut{{stroke:var(--fg);stroke-width:3.5}}
-.chord .dot{{fill:var(--fg)}}
-.chord .open{{fill:none;stroke:var(--fg);stroke-width:1.5}}
-.chord .mark,.chord .fretno{{fill:var(--muted);font-size:11px;
-text-anchor:middle;font-family:inherit}}
-.stems{{list-style:none;padding:0;display:flex;gap:.75rem;flex-wrap:wrap}}
-.stems a{{display:inline-block;padding:.35rem .8rem;border:1px solid var(--line);
-border-radius:99px;text-decoration:none;color:var(--fg);background:var(--card)}}
-.muted{{color:var(--muted);font-size:.85rem}}
-</style></head><body><main>
+  :root {{
+    --bg: #fdfdfc; --fg: #1a1a1c; --muted: #6a6a70;
+    --panel: #f0f0ee; --accent: #2563eb;
+  }}
+  @media (prefers-color-scheme:dark) {{
+    :root {{ --bg: #131316; --fg: #ececf0; --muted: #9a9aa4;
+             --panel: #202024; }}
+  }}
+  body {{
+    font: 16px/1.65 -apple-system, "Segoe UI", sans-serif;
+    max-width: 46rem; margin: 2.5rem auto; padding: 0 1.2rem;
+    background: var(--bg); color: var(--fg);
+  }}
+  h1 {{ margin: 0 0 .2rem; letter-spacing: -.02em; }}
+  h2 {{ margin: 2.2rem 0 .6rem; font-size: 1.05rem; }}
+  .facts {{ color: var(--muted); margin-bottom: 1.4rem; }}
+  audio {{ width: 100%; margin: .6rem 0 .5rem; }}
+  .timeline {{
+    position: relative; display: flex; height: 3rem;
+    border-radius: 10px; overflow: hidden; cursor: pointer;
+  }}
+  .seg {{
+    display: flex; align-items: center; justify-content: center;
+    min-width: 1.6rem; font-size: .72rem; font-weight: 650; color: #fff;
+    background: hsl(var(--hue,200) 42% 46%);
+    border-right: 1px solid rgb(255 255 255 / .35);
+  }}
+  .seg:hover {{ filter: brightness(1.18); }}
+  .seg span {{ overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; padding: 0 .3rem; }}
+  #playhead {{
+    position: absolute; top: 0; bottom: 0; left: 0; width: 2px;
+    background: #fff; box-shadow: 0 0 4px rgb(0 0 0 / .6);
+    pointer-events: none; transition: left .2s linear;
+  }}
+  .arrangement {{ color: var(--muted); font-size: .88rem; margin-top: .5rem; }}
+  .missing {{ font-size: .9rem; }}
+  .chip {{
+    display: inline-block; background: #c0392b; color: #fff;
+    border-radius: 99px; padding: .05rem .6rem; margin: 0 .2rem;
+    font-size: .78rem; font-weight: 650;
+  }}
+  .lyrics {{
+    white-space: pre-wrap; background: var(--panel); padding: 1rem 1.2rem;
+    border-radius: 10px; font-family: inherit;
+  }}
+  .note {{ font-size: .85rem; color: var(--muted); font-style: italic; }}
+  .stems {{ columns: 2; padding-left: 1.2rem; }}
+  .stems a {{ color: var(--accent); }}
+  .cards {{ display: flex; flex-wrap: wrap; gap: 1rem; }}
+  .card {{
+    margin: 0; padding: .6rem .4rem .4rem; background: var(--panel);
+    border-radius: 10px; text-align: center;
+  }}
+  .card figcaption {{ font-weight: 700; }}
+  .card small {{ display: block; font-weight: 400; color: var(--muted); }}
+  .chordbox {{ width: 110px; height: 132px; }}
+  .chordbox .fret, .chordbox .string {{ stroke: var(--muted); stroke-width: 1; }}
+  .chordbox .nut {{ stroke: var(--fg); stroke-width: 3; }}
+  .chordbox .dot {{ fill: var(--fg); }}
+  .chordbox .open {{ fill: none; stroke: var(--fg); stroke-width: 1.5; }}
+  .chordbox .mark, .chordbox .basefret {{
+    fill: var(--muted); font: 600 11px sans-serif; text-anchor: middle;
+  }}
+  .chordbox .basefret {{ text-anchor: start; }}
+  ul {{ padding-left: 1.2rem; }}
+  li {{ margin: .45rem 0; }}
+  code {{ background: var(--panel); padding: .1rem .35rem;
+          border-radius: 5px; font-size: .85em; }}
+</style>
+</head>
+<body>
 <h1>{title}</h1>
 <div class="facts">{facts}</div>
-<section>{player}{timeline}<div class="legend">{legend}</div></section>
-<section><h2>Structure</h2>{sections}{missing}</section>
+{audio}
+{timeline}
+<div class="arrangement">{arrangement}</div>
+{missing}
 {lyrics}
 {chords}
 {stems}
-</main>
+<h2>To finish this</h2>
+<ul>{questions}</ul>
+{skipped}
 <script>
-(function(){{
-  var player=document.getElementById('player');
-  var head=document.getElementById('playhead');
-  function seek(t){{ if(!player) return;
-    player.currentTime=parseFloat(t)||0;
-    player.play().catch(function(){{}});
-  }}
-  document.querySelectorAll('.seg,tr.row').forEach(function(el){{
-    el.addEventListener('click',function(){{ seek(el.dataset.start); }});
-  }});
-  if(player&&head){{
-    player.addEventListener('timeupdate',function(){{
-      var d=player.duration;
-      if(d&&isFinite(d)) head.style.left=(100*player.currentTime/d)+'%';
+  (function () {{
+    var player = document.getElementById("player");
+    var playhead = document.getElementById("playhead");
+    var timeline = document.getElementById("timeline");
+    if (!player) return;
+    document.querySelectorAll(".seg[data-start]").forEach(function (seg) {{
+      seg.addEventListener("click", function () {{
+        player.currentTime = parseFloat(seg.dataset.start);
+        player.play();
+      }});
     }});
-  }}
-}})();
+    if (playhead && timeline) {{
+      player.addEventListener("timeupdate", function () {{
+        if (!player.duration) return;
+        playhead.style.left =
+          (100 * player.currentTime / player.duration) + "%";
+      }});
+    }}
+  }})();
 </script>
-</body></html>
+</body>
+</html>
 """
