@@ -215,9 +215,9 @@ disk.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-225 tests, no network, no credentials. Five ffmpeg round-trips skip themselves
+238 tests, no network, no credentials. Five ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 230.
+runs 243.
 
 The hosted-service tests are fully mocked — they verify this code's logic, not
 vendor behaviour. **No live API call has ever been made from this repository.**
