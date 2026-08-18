@@ -125,3 +125,52 @@ timestamp. To see what a previous run actually did:
 cat projects/working-title/project.json
 music-stack music-ai job <job-id>
 ```
+
+## Working out a lick
+
+Structure and stems say how the song is arranged. Neither tells you *what you
+played*. That needs pitch transcription — `basic-pitch`, which is polyphonic
+and instrument-agnostic.
+
+```bash
+pip install -U basic-pitch
+
+music-stack lick \
+  --input projects/working-title/input/demo.m4a \
+  --start 1:23 --end 1:31
+```
+
+Times take `83`, `1:23`, or `1:23.5`.
+
+**Trim tightly.** It is the single biggest accuracy lever. Transcribing four
+seconds beats transcribing four minutes: fewer overlapping notes to confuse the
+model, and no unrelated material to pollute the scale hypothesis. Two seconds
+of run-in is plenty.
+
+If the lick sits under vocals or a full band, isolate it first:
+
+```bash
+music-stack lick --input demo.m4a --start 1:23 --end 1:31 --isolate other
+```
+
+Demucs' `other` stem is where guitar lands (`vocals`, `drums`, and `bass` being
+the named three). This needs demucs installed; without it the command says so
+and continues on the full mix.
+
+You get the notes in order, ASCII tab on the top three strings, a ranked scale
+hypothesis, and a per-note table with fret positions. `--all-strings` widens
+the fingering search; `--sharps` names notes with sharps instead of flats.
+
+### On the scale ranking
+
+It is a ranked list, not a verdict, because the ambiguity is often real. A
+minor pentatonic and its relative major contain *identical* notes — A C D E G
+is both A minor pentatonic and C major pentatonic. Nothing in the note set can
+separate them; only where the phrase resolves can, so the ranking weighs the
+last note heaviest, then the first, then how often the candidate root is
+played. When the second entry is the relative major of the first, that is the
+tool telling you the truth rather than guessing.
+
+Scales are also scored on *fit*, not just coverage. A seven-note scale contains
+a five-note one, so coverage alone would always favour the bigger scale;
+penalising unplayed scale degrees is what lets a pentatonic win.

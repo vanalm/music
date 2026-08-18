@@ -83,6 +83,14 @@ TOOLS = {
         "pip install -U openai-whisper",
         "https://github.com/openai/whisper",
     ),
+    "basic-pitch": Tool(
+        "basic-pitch",
+        "basic-pitch",
+        "pip install -U basic-pitch",
+        "https://github.com/spotify/basic-pitch",
+        "Polyphonic audio-to-MIDI. This is the one that tells you what notes "
+        "you played.",
+    ),
 }
 
 #: Whisper reaches a Mac by several routes, and the argv differs for each.
@@ -352,3 +360,55 @@ def detect_device():
     if os.uname().sysname == "Darwin" and os.uname().machine == "arm64":
         return "mps"
     return None
+
+
+# -- note transcription ---------------------------------------------------
+
+
+def notes_command(path, out_dir, *, binary="basic-pitch", note_events=True,
+                  sonify=False):
+    """Build the basic-pitch argv.
+
+    Note the argument order: output directory comes *before* the input, which
+    is the opposite of most tools and an easy thing to get backwards.
+    """
+    argv = [binary, str(out_dir), str(path)]
+    if note_events:
+        # The CSV is far easier to read than the MIDI binary, and carries the
+        # same note starts, ends, and pitches.
+        argv.append("--save-note-events")
+    if sonify:
+        argv.append("--sonify-midi")
+    return argv
+
+
+def notes(path, out_dir, *, sonify=False, dry_run=False):
+    """Transcribe *path* to note events with basic-pitch."""
+    path = _check_input(path)
+    out_dir = Path(out_dir)
+    tool = TOOLS["basic-pitch"]
+    argv = notes_command(
+        path, out_dir,
+        binary=tool.binary if dry_run else tool.require(),
+        sonify=sonify,
+    )
+    if dry_run:
+        return {"command": argv}
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _run(argv)
+    csvs = sorted(out_dir.glob("*.csv"))
+    midis = sorted(out_dir.glob("*.mid")) + sorted(out_dir.glob("*.midi"))
+    if not csvs:
+        raise MusicStackError(
+            "basic-pitch wrote no note-event CSV to {}. It may have produced "
+            "only MIDI ({}); re-run with --dry-run and check the flags.".format(
+                out_dir, ", ".join(p.name for p in midis) or "none"
+            )
+        )
+    return {
+        "command": argv,
+        "note_events": str(csvs[0]),
+        "midi": str(midis[0]) if midis else None,
+        "files": [str(p) for p in csvs + midis],
+    }

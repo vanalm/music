@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, audio, brief, local_tools, projects
+from . import __version__, audio, brief, local_tools, notes as notes_mod, projects
 from .adapters import kits as kits_adapter
 from .adapters import moises as moises_adapter
 from .adapters import music_ai as music_ai_adapter
@@ -127,6 +127,79 @@ def cmd_analyze(args, settings):
     return 0
 
 
+# -- lick -----------------------------------------------------------------
+
+
+def cmd_lick(args, settings):
+    """Work out the actual notes in a short phrase.
+
+    Trim -> (optionally isolate the instrument) -> basic-pitch -> notes, tab,
+    and a scale hypothesis. Trimming first is the single biggest accuracy
+    lever: transcribing four seconds beats transcribing four minutes.
+    """
+    src = Path(args.input).expanduser()
+    work_dir = Path(args.output or (settings.root / "licks"))
+    work_dir.mkdir(parents=True, exist_ok=True)
+    stem = src.stem
+
+    clip = src
+    if args.start or args.end:
+        clip = work_dir / "{}-clip.wav".format(stem)
+        audio.trim(src, clip, start=args.start, end=args.end, overwrite=True)
+        print("clip: {}".format(clip))
+
+    if args.isolate:
+        if not local_tools.TOOLS["demucs"].which():
+            print("note: --isolate needs demucs; continuing on the full mix")
+        else:
+            print("isolating {}...".format(args.isolate))
+            result = local_tools.stems(
+                clip, work_dir / "stems", two_stems=args.isolate,
+                device=local_tools.detect_device(),
+            )
+            # Demucs writes "<name>.wav" and "no_<name>.wav"; we want the former.
+            wanted = [
+                f for f in result["files"]
+                if Path(f).stem == args.isolate
+            ]
+            if wanted:
+                clip = Path(wanted[0])
+                print("using: {}".format(clip))
+
+    transcription = local_tools.notes(clip, work_dir / "notes", dry_run=args.dry_run)
+    if args.dry_run:
+        print("$ {}".format(" ".join(transcription["command"])))
+        return 0
+
+    events = notes_mod.read_note_events(transcription["note_events"])
+    events = notes_mod.filter_events(
+        events,
+        min_midi=args.min_midi,
+        max_midi=args.max_midi,
+        min_duration=args.min_duration,
+    )
+    if not events:
+        print(
+            "No notes survived filtering. Loosen --min-duration, or widen "
+            "--min-midi/--max-midi.\nRaw events: {}".format(
+                transcription["note_events"]
+            )
+        )
+        return 1
+
+    strings = notes_mod.TOP_THREE if args.top_strings else tuple(range(1, 7))
+    described = notes_mod.describe(events, strings=strings, flats=not args.sharps)
+    print()
+    print(notes_mod.format_report(described, flats=not args.sharps))
+
+    out = work_dir / "{}-lick.json".format(stem)
+    out.write_text(json.dumps(described, indent=2) + "\n", encoding="utf-8")
+    print("\nSaved {}".format(out))
+    if transcription.get("midi"):
+        print("MIDI:  {}  (drag into any DAW)".format(transcription["midi"]))
+    return 0
+
+
 # -- local ----------------------------------------------------------------
 
 
@@ -177,6 +250,14 @@ def cmd_local_structure(args, settings):
             print()
             _print_json(local_tools.summarize_structure(path))
     return 0
+
+
+def cmd_local_notes(args, settings):
+    return _emit(
+        local_tools.notes(
+            args.input, args.output, sonify=args.sonify, dry_run=args.dry_run
+        )
+    )
 
 
 def cmd_local_lyrics(args, settings):
@@ -429,6 +510,37 @@ def build_parser():
     insp.add_argument("--full", action="store_true", help="full ffprobe JSON")
     insp.set_defaults(func=cmd_audio_inspect)
 
+    lick = sub.add_parser(
+        "lick", help="what notes are in this phrase? (trim, transcribe, tab)"
+    )
+    lick.add_argument("--input", required=True)
+    lick.add_argument("--start", help="e.g. 1:23 — where the lick begins")
+    lick.add_argument("--end", help="e.g. 1:31 — where it ends")
+    lick.add_argument("--output", help="working directory (default ./licks)")
+    lick.add_argument(
+        "--isolate",
+        help="separate this source first with demucs, e.g. other (guitar) or vocals",
+    )
+    lick.add_argument(
+        "--top-strings",
+        action="store_true",
+        default=True,
+        help="map to the high three strings (default)",
+    )
+    lick.add_argument(
+        "--all-strings", dest="top_strings", action="store_false",
+        help="consider all six strings",
+    )
+    lick.add_argument("--min-midi", type=int, help="drop notes below this MIDI number")
+    lick.add_argument("--max-midi", type=int, help="drop notes above this MIDI number")
+    lick.add_argument(
+        "--min-duration", type=float, default=0.05,
+        help="drop notes shorter than this (seconds); filters transient noise",
+    )
+    lick.add_argument("--sharps", action="store_true", help="name notes with sharps")
+    lick.add_argument("--dry-run", action="store_true")
+    lick.set_defaults(func=cmd_lick)
+
     loc = sub.add_parser(
         "local", help="local analysis — no account, nothing uploaded"
     )
@@ -452,6 +564,13 @@ def build_parser():
     stru.add_argument("--output", required=True)
     stru.add_argument("--dry-run", action="store_true")
     stru.set_defaults(func=cmd_local_structure)
+
+    nts = loc_sub.add_parser("notes", help="audio to MIDI notes with basic-pitch")
+    nts.add_argument("--input", required=True)
+    nts.add_argument("--output", required=True)
+    nts.add_argument("--sonify", action="store_true", help="also render the MIDI to wav")
+    nts.add_argument("--dry-run", action="store_true")
+    nts.set_defaults(func=cmd_local_notes)
 
     lyr = loc_sub.add_parser("lyrics", help="transcribe with Whisper")
     lyr.add_argument("--input", required=True)

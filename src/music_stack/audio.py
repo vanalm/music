@@ -152,3 +152,66 @@ def _float_or_none(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def parse_time(value):
+    """Parse ``83``, ``1:23``, or ``1:23.5`` into seconds.
+
+    Licks get located by ear with a stopwatch, so accept the way people
+    actually read a timeline rather than demanding raw seconds.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    try:
+        if len(parts) == 1:
+            return float(parts[0])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    except ValueError:
+        pass
+    raise AudioError(
+        "Could not read {!r} as a time. Use seconds (83), m:ss (1:23), "
+        "or h:mm:ss.".format(value)
+    )
+
+
+def trim(src, dest, *, start=None, end=None, overwrite=False):
+    """Copy the span between *start* and *end* out of *src*.
+
+    Re-encodes to PCM rather than stream-copying: a stream copy can only cut on
+    a keyframe, which for a short lick may be a second off. Accuracy matters
+    more than speed over a few seconds of audio.
+    """
+    src, dest = Path(src), Path(dest)
+    if not src.exists():
+        raise AudioError("No such audio file: {}".format(src))
+    if dest.exists() and not overwrite:
+        raise AudioError(
+            "{} already exists. Pass --overwrite to replace it.".format(dest)
+        )
+    start_s = parse_time(start)
+    end_s = parse_time(end)
+    if start_s is not None and end_s is not None and end_s <= start_s:
+        raise AudioError(
+            "end ({}) must come after start ({}).".format(end, start)
+        )
+
+    ffmpeg = require("ffmpeg")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    argv = [ffmpeg, "-hide_banner", "-nostdin", "-y" if overwrite else "-n"]
+    # -ss before -i seeks fast; combined with re-encoding it stays sample-accurate.
+    if start_s is not None:
+        argv += ["-ss", str(start_s)]
+    argv += ["-i", str(src)]
+    if end_s is not None:
+        argv += ["-t", str(end_s - (start_s or 0))]
+    argv += ["-vn", "-map_metadata", "-1", "-acodec", "pcm_s24le",
+             "-ar", str(TARGET_RATE), str(dest)]
+    _run(argv)
+    return dest
