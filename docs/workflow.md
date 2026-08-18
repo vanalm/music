@@ -174,3 +174,58 @@ tool telling you the truth rather than guessing.
 Scales are also scored on *fit*, not just coverage. A seven-note scale contains
 a five-note one, so coverage alone would always favour the bigger scale;
 penalising unplayed scale degrees is what lets a pentatonic win.
+
+### Chords, and sheet music
+
+`basic-pitch` is polyphonic — it reports overlapping notes already. `lick`
+groups those into chords, names them, and fingers them across all six strings:
+
+```
+Progression: C Am F G
+
+Tab:
+e|-0------0------1------3-----|
+B|-1------1------1------0-----|
+G|-0------2------2------0-----|
+D|-2------2------3------0-----|
+A|-3------0-------------2-----|
+E|----------------------3-----|
+
+  0.00s  C    C3 E3 G3 C4 E4    x32010
+  1.00s  Am   A2 E3 A3 C4 E4    x02210
+```
+
+Chord boxes for each distinct shape follow, unless you pass `--no-diagrams`.
+
+The voicing shown is **descriptive, not prescriptive**: it fingers the notes
+actually detected rather than substituting a textbook shape, because the
+question is "what did I play", not "how is this chord usually voiced". When
+the detected notes cannot be one hand position — seven pitches, or a spread of
+three octaves — it says so instead of inventing a grip.
+
+Naming leans on the bass. `A C E G` is *exactly* Am7 and *exactly* C6; the note
+set cannot separate them and only what is underneath can, so the lowest note
+decides. A note that fits no chord tone is reported as `extra` rather than
+quietly pushing the name to something exotic — usually it is a transcription
+artefact, not a real extension.
+
+**Tuning for the material:** `--chord-window` sets how close onsets must be to
+count as one strum (default 0.08s). Raise it for slow, spread strums; lower it
+if fast passages are being glued together. `--melody-only` forces the
+single-line reading; `--also-melody` shows both.
+
+For notation:
+
+```bash
+music-stack lick --input demo.m4a --start 1:23 --end 1:31 --musicxml --bpm 92
+```
+
+That writes a `.musicxml` which MuseScore (free), Guitar Pro, Dorico, and
+Sibelius all open — engraved notation, with chord symbols above the staff, and
+guitar tab if you add a tab staff in the editor.
+
+The MIDI that basic-pitch writes also opens directly in MuseScore and needs no
+extra step. Prefer it when rhythm matters: **MusicXML export quantises to a
+sixteenth-note grid against a fixed tempo**, so anything rubato, swung, or in
+triplets will notate squarer than you played it. Pass the real `--bpm` (from
+`local structure`) to keep the barlines honest.

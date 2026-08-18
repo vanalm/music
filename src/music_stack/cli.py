@@ -11,7 +11,8 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, audio, brief, local_tools, notes as notes_mod, projects
+from . import (__version__, audio, brief, chords as chords_mod, local_tools,
+               musicxml, notes as notes_mod, projects)
 from .adapters import kits as kits_adapter
 from .adapters import moises as moises_adapter
 from .adapters import music_ai as music_ai_adapter
@@ -187,16 +188,57 @@ def cmd_lick(args, settings):
         )
         return 1
 
-    strings = notes_mod.TOP_THREE if args.top_strings else tuple(range(1, 7))
-    described = notes_mod.describe(events, strings=strings, flats=not args.sharps)
-    print()
-    print(notes_mod.format_report(described, flats=not args.sharps))
+    flats = not args.sharps
+    analysed = chords_mod.analyze(
+        events, window=args.chord_window, min_notes=2, flats=flats
+    )
+    polyphonic = len(analysed) > 0
+
+    payload = {}
+    if polyphonic and not args.melody_only:
+        print()
+        print(chords_mod.format_chords(analysed, show_diagrams=not args.no_diagrams))
+        payload["chords"] = [
+            {
+                "start": c["start"],
+                "end": c["end"],
+                "symbol": (c["chord"] or {}).get("symbol"),
+                "notes": (c["chord"] or {}).get("notes"),
+                "exact": (c["chord"] or {}).get("exact"),
+                "shorthand": c["voicing"]["shorthand"] if c["voicing"] else None,
+                "positions": c["voicing"]["positions"] if c["voicing"] else None,
+            }
+            for c in analysed
+        ]
+
+    # The single-note view stays useful even for chordal material: it is how
+    # you see the top line, and --melody-only forces it on its own.
+    if not polyphonic or args.melody_only or args.also_melody:
+        strings = (
+            tuple(range(1, 7)) if not args.top_strings else notes_mod.TOP_THREE
+        )
+        described = notes_mod.describe(events, strings=strings, flats=flats)
+        print()
+        print(notes_mod.format_report(described, flats=flats))
+        payload["melody"] = described
 
     out = work_dir / "{}-lick.json".format(stem)
-    out.write_text(json.dumps(described, indent=2) + "\n", encoding="utf-8")
+    out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print("\nSaved {}".format(out))
+
+    if args.musicxml:
+        groups = analysed or chords_mod.analyze(events, min_notes=1, flats=flats)
+        score = musicxml.build(
+            groups, bpm=args.bpm, title=args.title or stem,
+        )
+        xml_path = work_dir / "{}.musicxml".format(stem)
+        xml_path.write_text(score, encoding="utf-8")
+        print("Score: {}".format(xml_path))
+        print("       open it in MuseScore (free) for engraved notation + tab")
+
     if transcription.get("midi"):
-        print("MIDI:  {}  (drag into any DAW)".format(transcription["midi"]))
+        print("MIDI:  {}".format(transcription["midi"]))
+        print("       also opens directly in MuseScore, and keeps raw timing")
     return 0
 
 
@@ -538,6 +580,30 @@ def build_parser():
         help="drop notes shorter than this (seconds); filters transient noise",
     )
     lick.add_argument("--sharps", action="store_true", help="name notes with sharps")
+    lick.add_argument(
+        "--chord-window", type=float, default=0.08,
+        help="seconds within which notes count as struck together (default 0.08)",
+    )
+    lick.add_argument(
+        "--melody-only", action="store_true",
+        help="treat everything as a single line, even where notes overlap",
+    )
+    lick.add_argument(
+        "--also-melody", action="store_true",
+        help="show the single-note view alongside the chords",
+    )
+    lick.add_argument(
+        "--no-diagrams", action="store_true", help="skip the chord boxes"
+    )
+    lick.add_argument(
+        "--musicxml", action="store_true",
+        help="write a .musicxml score (opens in MuseScore, Guitar Pro, Sibelius)",
+    )
+    lick.add_argument(
+        "--bpm", type=float, default=120,
+        help="tempo for notating rhythm in the score (default 120)",
+    )
+    lick.add_argument("--title", help="title for the score")
     lick.add_argument("--dry-run", action="store_true")
     lick.set_defaults(func=cmd_lick)
 
