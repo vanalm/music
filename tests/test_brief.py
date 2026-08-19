@@ -126,6 +126,34 @@ class ProgressionTests(unittest.TestCase):
         self.assertEqual(brief.progression_by_section([], FULL_STRUCTURE["sections"]), [])
 
 
+class DetectChordsTests(unittest.TestCase):
+    """From a real basic-pitch CSV to named, fingered, serialisable chords."""
+
+    CSV = (
+        "start_time_s,end_time_s,pitch_midi,velocity\n"
+        # A strummed C major triad: C3 E3 G3 C4 E4 within one strum window.
+        "1.00,1.90,48,80\n1.02,1.90,52,80\n1.04,1.90,55,80\n"
+        "1.06,1.90,60,80\n1.08,1.90,64,80\n"
+    )
+
+    def test_names_and_fingers_a_strummed_chord(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "song_basic_pitch.csv"
+            path.write_text(self.CSV, encoding="utf-8")
+            detected = brief.detect_chords(path)
+        self.assertEqual(len(detected), 1)
+        chord = detected[0]
+        self.assertEqual(chord["symbol"], "C")
+        # positions must be plain dicts (JSON) with string/fret for the SVG.
+        self.assertIn("string", chord["positions"][0])
+        self.assertIsInstance(chord["shorthand"], str)
+        import json as json_mod
+        json_mod.dumps(detected)  # must survive brief.json
+
+    def test_no_path_is_empty_not_an_error(self):
+        self.assertEqual(brief.detect_chords(None), [])
+
+
 class ChordsRenderTests(unittest.TestCase):
     def test_brief_renders_progression_and_shapes(self):
         text = brief.render(result_with(

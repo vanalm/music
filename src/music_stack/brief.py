@@ -139,16 +139,15 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
             stage = local_tools.notes(
                 source, project_dir / "notes" / "chords", dry_run=dry_run
             )
-        except Exception as exc:
-            # A failed transcription costs one section, never the brief.
-            result["skipped"].append("chords")
-            log("chord transcription failed, continuing: {}".format(exc))
-        else:
             stage["transcribed"] = str(source)
             stage["from_instrumental_stem"] = bool(instrumental)
             if not dry_run:
                 stage["chords"] = detect_chords(stage.get("note_events"))
             result["stages"]["chords"] = stage
+        except Exception as exc:
+            # A failed transcription costs one section, never the brief.
+            result["skipped"].append("chords")
+            log("chord transcription failed, continuing: {}".format(exc))
 
     if dry_run:
         return result
@@ -209,8 +208,8 @@ def detect_chords(note_events_path, *, min_duration=0.09, min_notes=3):
         }
         voicing = item.get("voicing")
         if voicing:
-            entry["positions"] = voicing
-            entry["shorthand"] = chords_mod.shorthand(voicing)
+            entry["positions"] = voicing["positions"]
+            entry["shorthand"] = voicing["shorthand"]
         out.append(entry)
     return out
 
