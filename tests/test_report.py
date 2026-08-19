@@ -294,6 +294,51 @@ class NoteRollTests(unittest.TestCase):
         self.assertIn('opacity="0.66"', svg)
         self.assertIn('opacity="0.86"', svg)
 
+    def test_note_names_stack_under_the_roll_in_order(self):
+        html = report._names_row(self.EVENTS)
+        # Two quick fill notes then the chord note, in playback order.
+        self.assertLess(html.index("E4"), html.index("G4"))
+        self.assertLess(html.index("G4"), html.index("C3"))
+        self.assertIn('data-start="10.0"', html)
+
+    def test_simultaneous_notes_share_a_column_highest_first(self):
+        events = [
+            {"start": 5.0, "end": 6.0, "midi": 48},
+            {"start": 5.03, "end": 6.0, "midi": 64},
+        ]
+        cols = report.name_columns(events)
+        self.assertEqual(len(cols), 1)
+        html = report._names_row(events)
+        self.assertLess(html.index("E4"), html.index("C3"))
+
+    def test_view_selector_offers_all_four_views(self):
+        data = payload()
+        data["stages"]["chords"] = {
+            "chords": [
+                {"start": 10.0, "end": 10.9, "symbol": "C",
+                 "shorthand": "x32010",
+                 "positions": [{"string": 5, "fret": 3}]},
+            ],
+            "notes": self.EVENTS,
+        }
+        html = report.build(data)
+        for label in ("Piano roll", "Guitar tab", "Sheet music",
+                      "Chord chart"):
+            self.assertIn(label, html)
+        self.assertIn('data-view="gtab"', html)
+        self.assertIn("staffwrap", html)
+
+    def test_staff_draws_noteheads_ledgers_and_flats(self):
+        events = [
+            {"start": 10.0, "end": 10.4, "midi": 63},  # Eb4 -> flat
+            {"start": 11.0, "end": 11.4, "midi": 48},  # C3 -> ledger lines
+        ]
+        svg = report.staff_svg(events, 8.0, 40.0)
+        self.assertEqual(svg.count('class="sn"'), 2)
+        self.assertIn("♭", svg)
+        self.assertIn('class="ledger"', svg)
+        self.assertIn('class="clef"', svg)
+
     def test_rolls_appear_in_section_panels(self):
         data = payload()
         data["stages"]["chords"] = {

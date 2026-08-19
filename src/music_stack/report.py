@@ -26,6 +26,7 @@ import tempfile
 from pathlib import Path
 
 from . import audio as audio_mod
+from . import notes as notes_mod
 from .notes import note_name
 
 #: Section label -> hue, so the timeline is scannable at a glance.
@@ -224,6 +225,136 @@ def note_roll(events, start, end, *, width=1000, row=8):
     return "".join(parts)
 
 
+def name_columns(events, *, window=0.08):
+    """Group notes into time columns for the stacked-names row.
+
+    Notes starting within *window* of the column's first onset stack into
+    one column (a strummed chord reads vertically); columns run left to
+    right in playback order, mirroring the roll above them.
+    """
+    cols = []
+    for e in sorted(events or [], key=lambda x: (float(x["start"]), x["midi"])):
+        start = float(e["start"])
+        if cols and start - cols[-1]["start"] <= window:
+            cols[-1]["midis"].append(e["midi"])
+            cols[-1]["end"] = max(cols[-1]["end"], float(e["end"]))
+        else:
+            cols.append(
+                {"start": start, "end": float(e["end"]), "midis": [e["midi"]]}
+            )
+    return cols
+
+
+def _names_row(events):
+    """The hover-free view: every note name, in order, chords stacked."""
+    cols = name_columns(events)
+    if not cols:
+        return ""
+    spans = []
+    for col in cols:
+        names = "".join(
+            "<i>{}</i>".format(_esc(note_name(m, flats=True)))
+            for m in sorted(col["midis"], reverse=True)
+        )
+        spans.append(
+            '<span class="ncol" data-start="{t0}" data-end="{t1}">'
+            "{names}</span>".format(
+                t0=round(col["start"], 2), t1=round(col["end"], 2),
+                names=names,
+            )
+        )
+    return '<div class="names">{}</div>'.format("".join(spans))
+
+
+#: Pitch class -> (letter index C=0..B=6, accidental) using flat spellings,
+#: matching FLAT note names.
+_PC_DIATONIC = {
+    0: (0, ""), 1: (1, "♭"), 2: (1, ""), 3: (2, "♭"), 4: (2, ""),
+    5: (3, ""), 6: (4, "♭"), 7: (4, ""), 8: (5, "♭"), 9: (5, ""),
+    10: (6, "♭"), 11: (6, ""),
+}
+
+
+def _diatonic(midi):
+    letter, accidental = _PC_DIATONIC[midi % 12]
+    return (midi // 12 - 1) * 7 + letter, accidental
+
+
+def staff_svg(events, start, end, *, width=1000):
+    """A treble-staff pitch view: noteheads on the five lines, time
+    proportional left to right, ledger lines and flats where needed.
+
+    Deliberately unmetered — no stems, beams, or bar lines — because the
+    transcription carries pitch and time, not note values. It reads like
+    the roll but in staff position; the MusicXML export remains the route
+    to engraved rhythm.
+    """
+    span = max(float(end) - float(start), 0.001)
+    notes = [
+        e for e in events or []
+        if float(e["start"]) < end and float(e["end"]) > start
+    ]
+    if not notes:
+        return ""
+    step, gutter = 4, 40
+    staff_lines = (30, 32, 34, 36, 38)  # E4 G4 B4 D5 F5
+    diatonics = [_diatonic(n["midi"])[0] for n in notes]
+    d_hi = max(38, max(diatonics)) + 2
+    d_lo = min(30, min(diatonics)) - 2
+
+    def y(d):
+        return 6 + (d_hi - d) * step
+
+    height = y(d_lo) + 6
+    parts = [
+        '<svg class="staff" viewBox="0 0 {w} {h}" width="100%" '
+        'xmlns="http://www.w3.org/2000/svg">'.format(w=width, h=height)
+    ]
+    for d in staff_lines:
+        parts.append(
+            '<line x1="{g}" y1="{y}" x2="{w}" y2="{y}" class="sline"/>'.format(
+                g=8, y=y(d), w=width
+            )
+        )
+    parts.append(
+        '<text x="10" y="{y}" class="clef">\U0001d11e</text>'.format(
+            y=y(30) + 2
+        )
+    )
+    for n in notes:
+        d, accidental = _diatonic(n["midi"])
+        x = gutter + (max(float(n["start"]), start) - start) / span \
+            * (width - gutter - 10)
+        ny = y(d)
+        if d > 38:
+            for ledger in range(40, d + 1, 2):
+                parts.append(
+                    '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
+                    'class="ledger"/>'.format(x0=x - 8, x1=x + 8, y=y(ledger))
+                )
+        if d < 30:
+            for ledger in range(28, d - 1, -2):
+                parts.append(
+                    '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
+                    'class="ledger"/>'.format(x0=x - 8, x1=x + 8, y=y(ledger))
+                )
+        if accidental:
+            parts.append(
+                '<text x="{x}" y="{y}" class="acc">{a}</text>'.format(
+                    x=x - 13, y=ny + 3.5, a=accidental
+                )
+            )
+        parts.append(
+            '<ellipse class="sn" cx="{x:.1f}" cy="{y}" rx="4.6" ry="3.4">'
+            "<title>{name} · {t}s</title></ellipse>".format(
+                x=x, y=ny, name=_esc(note_name(n["midi"], flats=True)),
+                t=round(float(n["start"]), 1),
+            )
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 # -- page ------------------------------------------------------------------
 
 
@@ -368,23 +499,65 @@ def build(result, *, audio_path=None, chords=None):
                 "{sym}</span>".format(t0=t0, t1=t1, sym=_esc(sym))
                 for sym, t0, t1 in events
             )
-            roll = note_roll(all_notes, s_start, s_end)
-            roll_html = ""
+            sec_events = [
+                e for e in all_notes
+                if float(e["start"]) < s_end and float(e["end"]) > s_start
+            ]
+
+            # View 1 — piano roll with the note names stacked beneath.
+            roll = note_roll(sec_events, s_start, s_end)
+            roll_view = '<p class="note">No notes transcribed here.</p>'
             if roll:
-                roll_html = (
+                roll_view = (
                     '<div class="rollwrap" data-start="{t0}" '
                     'data-end="{t1}">{roll}'
-                    '<div class="roll-line"></div></div>'.format(
-                        t0=s_start, t1=s_end, roll=roll
+                    '<div class="roll-line"></div></div>{names}'.format(
+                        t0=s_start, t1=s_end, roll=roll,
+                        names=_names_row(sec_events),
                     )
                 )
-            tab = chords_mod.render_chord_tab(
+
+            # View 2 — every note as guitar tab, hand kept in position.
+            tab_view = '<p class="note">No notes transcribed here.</p>'
+            if sec_events:
+                positioned = notes_mod.choose_positions(
+                    sorted(sec_events,
+                           key=lambda e: (float(e["start"]), e["midi"])),
+                    strings=(1, 2, 3, 4, 5, 6),
+                )
+                tab_view = '<pre class="tab">{}</pre>'.format(
+                    _esc(notes_mod.render_tab(
+                        positioned, strings=(1, 2, 3, 4, 5, 6), width=3
+                    ))
+                )
+
+            # View 3 — treble-staff pitch view.
+            staff = staff_svg(sec_events, s_start, s_end)
+            staff_view = '<p class="note">No notes transcribed here.</p>'
+            if staff:
+                staff_view = (
+                    '<div class="rollwrap staffwrap" data-start="{t0}" '
+                    'data-end="{t1}">{staff}'
+                    '<div class="roll-line"></div></div>'.format(
+                        t0=s_start, t1=s_end, staff=staff
+                    )
+                )
+
+            # View 4 — the chords: chips plus the textbook-grip tab chart.
+            chord_tab = chords_mod.render_chord_tab(
                 [
                     {"voicing": {"positions": canon[sym][1]}}
                     if canon.get(sym) and canon[sym][1] else {"voicing": None}
                     for sym in symbols
                 ]
             )
+            chart_view = (
+                '<div class="chips">{chips}</div>'
+                '<pre class="tab">{tab}</pre>'.format(
+                    chips=chips, tab=_esc(chord_tab)
+                )
+            )
+
             lick = ""
             if norm_file:
                 lick = (
@@ -402,17 +575,30 @@ def build(result, *, audio_path=None, chords=None):
                 "{label}</span>"
                 '<span class="range">{c0}–{c1}</span>'
                 '<span class="prog-mini">{mini}</span></summary>'
-                '<div class="chips">{chips}</div>'
-                "{roll}"
-                '<details class="tabfold"><summary>Chord tab chart'
-                "</summary><pre class=\"tab\">{tab}</pre></details>"
+                '<div class="views">'
+                '<div class="vtabs">'
+                '<button type="button" class="vtab active" '
+                'data-view="roll">Piano roll</button>'
+                '<button type="button" class="vtab" data-view="gtab">'
+                "Guitar tab</button>"
+                '<button type="button" class="vtab" data-view="staff">'
+                "Sheet music</button>"
+                '<button type="button" class="vtab" data-view="chart">'
+                "Chord chart</button>"
+                "</div>"
+                '<div class="view active" data-view="roll">{roll}</div>'
+                '<div class="view" data-view="gtab">{gtab}</div>'
+                '<div class="view" data-view="staff">{staff}</div>'
+                '<div class="view" data-view="chart">{chart}</div>'
+                "</div>"
                 "{lick}</details>".format(
                     t0=s_start, t1=s_end, hue=hue,
                     label=_esc(label or "all"),
                     c0=_clock(s_start), c1=_clock(s_end),
                     mini=_esc(" · ".join(symbols[:8])
                               + (" …" if len(symbols) > 8 else "")),
-                    chips=chips, roll=roll_html, tab=_esc(tab), lick=lick,
+                    roll=roll_view, gtab=tab_view, staff=staff_view,
+                    chart=chart_view, lick=lick,
                 )
             )
         prog_html = ""
@@ -438,9 +624,10 @@ def build(result, *, audio_path=None, chords=None):
         if cards or prog_html:
             chords_html = (
                 "<h2>Play along</h2>"
-                '<p class="note">Chords and every transcribed note, section '
-                "by section. Click anywhere in a roll to hear that moment; "
-                "hover a note for its name.</p>{prog}"
+                '<p class="note">Every transcribed note, section by '
+                "section — switch each panel between piano roll, guitar "
+                "tab, sheet music, and the chord chart. Click anywhere in "
+                "a roll or staff to hear that moment.</p>{prog}"
                 "<h3>Chord shapes</h3><div class=\"cards\">{cards}</div>"
             ).format(prog=prog_html, cards="".join(cards))
 
@@ -613,6 +800,39 @@ _TEMPLATE = """<!DOCTYPE html>
     background: #e11d48; display: none; pointer-events: none;
   }}
 
+  .views {{ margin-top: .7rem; }}
+  .vtabs {{ display: inline-flex; gap: 2px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 9px; padding: 2px; }}
+  .vtab {{ border: 0; background: transparent; padding: .28rem .75rem;
+    border-radius: 7px; font: inherit; font-size: .78rem;
+    color: var(--muted); cursor: pointer; }}
+  .vtab:hover {{ color: var(--fg); }}
+  .vtab.active {{ background: var(--card); color: var(--fg);
+    font-weight: 600; box-shadow: 0 1px 2px rgb(16 24 40 / .1); }}
+  .view {{ display: none; margin-top: .6rem; }}
+  .view.active {{ display: block; }}
+
+  .names {{ display: flex; flex-wrap: wrap; gap: .18rem .28rem;
+    margin-top: .55rem; }}
+  .ncol {{ display: inline-flex; flex-direction: column;
+    align-items: center; padding: .12rem .3rem; border-radius: 6px;
+    background: var(--panel); border: 1px solid var(--line);
+    font: 600 .64rem/1.3 ui-monospace, "SF Mono", Menlo, monospace;
+    cursor: pointer; }}
+  .ncol i {{ font-style: normal; }}
+  .ncol:hover {{ border-color: var(--accent); color: var(--accent); }}
+  .ncol.now {{ background: var(--accent); border-color: var(--accent);
+    color: #fff; }}
+
+  .staffwrap {{ cursor: crosshair; background: #fff; }}
+  .staff {{ display: block; }}
+  .staff .sline {{ stroke: #98a2b3; stroke-width: 1; }}
+  .staff .ledger {{ stroke: #98a2b3; stroke-width: 1; }}
+  .staff .clef {{ font-size: 40px; fill: var(--fg); }}
+  .staff .acc {{ font-size: 10px; fill: var(--fg); }}
+  .staff .sn {{ fill: var(--accent); }}
+  .staff .sn:hover {{ fill: #16181d; }}
+
   .tabfold {{ margin: .5rem 0 0; }}
   .tabfold summary {{ cursor: pointer; color: var(--muted);
     font-size: .8rem; }}
@@ -680,16 +900,31 @@ there</div>
     var playhead = document.getElementById("playhead");
     var timeline = document.getElementById("timeline");
     if (!player) return;
-    document.querySelectorAll(".seg[data-start], .chip[data-start]")
-      .forEach(function (el) {{
-        el.addEventListener("click", function () {{
-          player.currentTime = parseFloat(el.dataset.start);
-          player.play();
+    document.querySelectorAll(
+      ".seg[data-start], .chip[data-start], .ncol[data-start]"
+    ).forEach(function (el) {{
+      el.addEventListener("click", function () {{
+        player.currentTime = parseFloat(el.dataset.start);
+        player.play();
+      }});
+    }});
+    var timed = document.querySelectorAll(
+      ".panel[data-start], .chip[data-start], .ncol[data-start]"
+    );
+    document.querySelectorAll(".views").forEach(function (views) {{
+      views.querySelectorAll(".vtab").forEach(function (btn) {{
+        btn.addEventListener("click", function () {{
+          views.querySelectorAll(".vtab").forEach(function (b) {{
+            b.classList.toggle("active", b === btn);
+          }});
+          views.querySelectorAll(".view").forEach(function (pane) {{
+            pane.classList.toggle(
+              "active", pane.dataset.view === btn.dataset.view
+            );
+          }});
         }});
       }});
-    var timed = document.querySelectorAll(
-      ".panel[data-start], .chip[data-start]"
-    );
+    }});
     var rolls = document.querySelectorAll(".rollwrap[data-start]");
     rolls.forEach(function (wrap) {{
       wrap.addEventListener("click", function (e) {{
