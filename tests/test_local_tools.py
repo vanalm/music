@@ -78,11 +78,13 @@ class CommandBuildingTests(unittest.TestCase):
         argv = local_tools.stems_command("in.wav", "out/", device="mps")
         self.assertEqual(argv[-1], "in.wav")
 
-    def test_allin1_passes_only_a_resolved_path(self):
+    def test_allin1_passes_overwrite_and_a_resolved_path(self):
+        # --overwrite: without it a re-analysis crashes on allin1's own
+        # cached demix instead of replacing it.
         argv = local_tools.structure_command("in.wav")
-        self.assertEqual(argv[0], "allin1")
-        self.assertEqual(len(argv), 2)
-        self.assertTrue(os.path.isabs(argv[1]))
+        self.assertEqual(argv[:2], ["allin1", "--overwrite"])
+        self.assertEqual(len(argv), 3)
+        self.assertTrue(os.path.isabs(argv[-1]))
 
     def test_whisper_command(self):
         argv = local_tools.lyrics_command("v.wav", "out/", model="medium", language="en")

@@ -220,8 +220,12 @@ def structure_command(path, *, binary="allin1"):
     stable output-dir flag across versions, so :func:`structure` runs it with
     ``cwd`` set to the destination instead of passing one. Only documented
     behaviour, no guessed flags.
+
+    ``--overwrite`` because re-analysing a project is normal here, and
+    without it allin1 crashes on its own cached demix (UnboundLocalError)
+    instead of reusing or replacing it.
     """
-    return [binary, str(Path(path).resolve())]
+    return [binary, "--overwrite", str(Path(path).resolve())]
 
 
 def structure(path, out_dir, *, dry_run=False):
