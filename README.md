@@ -101,16 +101,23 @@ plus ffmpeg.
 
 ## Optional tools — each adds a section to the brief
 
-None required. `music-stack local doctor` shows what you have and how to get
-the rest.
+None required, and one script installs all of them with the right versions
+(some need their own Python — it handles that):
+
+```bash
+./scripts/install-ml-tools.sh
+```
+
+`music-stack local doctor` shows what you have and how to get the rest by
+hand:
 
 | Install | Adds |
 |---|---|
 | `brew install ffmpeg` | conversion, trimming — **the only real requirement** |
 | `pip install -U demucs` | stem separation |
-| `pip install -U basic-pitch` | notes and chords |
-| `pip install -U openai-whisper` | lyric transcription |
-| allin1 (see `local doctor`) | tempo, beats, labelled sections |
+| `pip install -U basic-pitch` | notes and chords — needs Python ≤ 3.11 |
+| `pip install -U mlx-whisper` | lyric transcription (Apple Silicon) |
+| allin1 (see `install-ml-tools.sh`) | tempo, beats, labelled sections |
 
 Already have a Whisper? It finds `mlx_whisper`, `whisper-cli`, `whisper-cpp`,
 or `whisper` and adapts — no need to install another.

@@ -61,13 +61,20 @@ pulls nothing. Heavy ML tools are external programs looked up on `PATH` at call
 time (`shutil.which`), exactly like ffmpeg. A missing tool yields an install
 hint, never an `ImportError`.
 
+`./scripts/install-ml-tools.sh` installs everything below with the right
+versions and Pythons — run it once, re-running is safe. The per-tool detail:
+
 | Tool | Gives | Install |
 |---|---|---|
 | ffmpeg | conversion, trimming | `brew install ffmpeg` |
 | demucs | stems | `pip install -U demucs` |
-| allin1 | tempo, beats, labelled sections | needs madmom from git — see `local doctor` |
+| allin1 | tempo, beats, labelled sections | madmom from git + `natten==0.14.6`, Python ≤ 3.11 — use the script |
 | Whisper | lyrics | any of `mlx_whisper`, `whisper-cli`, `whisper-cpp`, `whisper` |
-| basic-pitch | notes and chords | `pip install -U basic-pitch` |
+| basic-pitch | notes and chords | `pip install -U basic-pitch` — **Python ≤ 3.11 only** (pins numpy<1.24) |
+
+Tools that need an older Python live in one shared venv
+(`~/.venvs/music-tools`, Python 3.11) with their binaries symlinked onto
+PATH — the package never imports them, so where they live is irrelevant.
 
 `local_tools.find_whisper()` detects whichever Whisper packaging is present and
 emits the right flag dialect for it. Do not assume `openai-whisper`.
