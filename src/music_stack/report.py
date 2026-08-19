@@ -274,12 +274,39 @@ def _names_row(events, start, end):
     return '<div class="names namesline">{}</div>'.format("".join(spans))
 
 
-def _words_row(segments, start, end):
-    """The lyric, placed at its moment beneath the roll.
+def _seq_x(t, times, xs=None, *, lead=2.0, colw=4.0):
+    """Map a time onto sequence-spaced x — the single source of truth.
 
-    Each Whisper segment sits at its horizontal time fraction like the
-    note names above it; the one being sung gets grown and accented by
-    the page script, so eyes track words, notes, and names in one column.
+    The same interpolation the page script uses for the playhead: find
+    the column sounding at *t* and glide toward the next in proportion.
+    With *xs* the answer is in the SVG's pixels; without, in monospace
+    ``ch`` columns (*lead* characters of margin, *colw* per column).
+    Returns ``(value, unit)``.
+    """
+    import bisect
+
+    idx = max(0, bisect.bisect_right(times, t) - 1)
+    frac = 0.0
+    if idx + 1 < len(times) and times[idx + 1] > times[idx]:
+        frac = (t - times[idx]) / (times[idx + 1] - times[idx])
+        frac = max(0.0, min(1.0, frac))
+    if xs is not None:
+        x = xs[idx]
+        if idx + 1 < len(xs):
+            x += frac * (xs[idx + 1] - xs[idx])
+        return x, "px"
+    return lead + colw / 2.0 + (idx + frac) * colw, "ch"
+
+
+def _words_row(segments, start, end, *, times=None, xs=None, lead=2.0,
+               colw=4.0):
+    """The lyric, placed at its moment beneath a chart.
+
+    Under the roll, each Whisper segment sits at its horizontal time
+    fraction; under sequence-spaced charts (staff, tab) it sits at the
+    same x as the column sounding then, via :func:`_seq_x`. The one being
+    sung gets grown and accented by the page script, so eyes track words,
+    notes, and names in one column.
     """
     span = max(float(end) - float(start), 0.001)
     inside = [
@@ -290,12 +317,17 @@ def _words_row(segments, start, end):
         return ""
     spans = []
     for seg in inside:
-        left = max(
-            0.0, min((float(seg["start"]) - start) / span * 100.0, 100.0)
-        )
+        t = float(seg["start"])
+        if times:
+            x, unit = _seq_x(t, times, xs, lead=lead, colw=colw)
+            left = "{:.1f}{}".format(x, unit)
+        else:
+            left = "{:.2f}%".format(
+                max(0.0, min((t - start) / span * 100.0, 100.0))
+            )
         spans.append(
-            '<span class="word" style="left:{left:.2f}%" data-start="{s}" '
-            'data-end="{e}">{text}</span>'.format(
+            '<span class="word" style="left:{left}" data-start="{s}" '
+            'data-end="{e}"><i>{text}</i></span>'.format(
                 left=left, s=seg["start"], e=seg["end"],
                 text=_esc(seg["text"]),
             )
@@ -317,7 +349,21 @@ def _diatonic(midi):
     return (midi // 12 - 1) * 7 + letter, accidental
 
 
-def staff_svg(events, start, end, *, col_step=26, gutter=48):
+def _dur_class(dur_beats):
+    """Quantize an onset gap (in beats) to a note-value bucket."""
+    if dur_beats >= 3.5:
+        return "whole"
+    if dur_beats >= 1.5:
+        return "half"
+    if dur_beats >= 0.75:
+        return "quarter"
+    if dur_beats >= 0.375:
+        return "eighth"
+    return "sixteenth"
+
+
+def staff_svg(events, start, end, *, col_step=26, gutter=48, beats=None,
+              downbeats=None):
     """A grand-staff pitch view with engraving-style spacing.
 
     Notes that sound together share one column, and columns advance by a
@@ -329,9 +375,14 @@ def staff_svg(events, start, end, *, col_step=26, gutter=48):
 
     Low notes sit on the bass staff instead of dangling from the treble on
     a tower of ledger lines; middle C takes the conventional single ledger
-    between the staves. Deliberately unmetered — no stems, beams, or bar
-    lines — because the transcription carries pitch and time, not note
-    values. The MusicXML export remains the route to engraved rhythm.
+    between the staves.
+
+    With allin1's *beats*/*downbeats* the staff also carries rhythm: a
+    time signature, bar lines at the downbeats, and note values read off
+    the onset gaps — open heads for halves, stems, beams across runs of
+    eighths and sixteenths, flags on lone ones. It is honest quantization
+    of a human performance, not engraving: the MusicXML export remains
+    the route to strict notation.
     """
     cols = name_columns(
         [
@@ -341,6 +392,28 @@ def staff_svg(events, start, end, *, col_step=26, gutter=48):
     )
     if not cols:
         return None
+
+    # -- rhythm groundwork (only with a usable beat grid) -----------------
+    import statistics
+
+    rhythm = None
+    beats = [float(b) for b in beats or []]
+    downbeats = [float(d) for d in downbeats or []]
+    if len(beats) >= 2:
+        diffs = [b2 - b1 for b1, b2 in zip(beats, beats[1:]) if b2 > b1]
+        beat_len = statistics.median(diffs) if diffs else 0
+        if beat_len > 0:
+            per_bar = None
+            if len(downbeats) >= 2:
+                counts = [
+                    sum(1 for b in beats if d1 <= b < d2)
+                    for d1, d2 in zip(downbeats, downbeats[1:])
+                ]
+                counts = [c for c in counts if c > 0]
+                if counts:
+                    per_bar = statistics.mode(counts)
+            rhythm = {"beat_len": beat_len, "per_bar": per_bar}
+
     step = 4
     treble_lines = (30, 32, 34, 36, 38)  # E4 G4 B4 D5 F5
     bass_lines = (18, 20, 22, 24, 26)    # G2 B2 D3 F3 A3
@@ -353,9 +426,23 @@ def staff_svg(events, start, end, *, col_step=26, gutter=48):
     def y(d):
         return 8 + (d_hi - d) * step
 
-    xs = [gutter + 18 + i * col_step for i in range(len(cols))]
+    ts_width = 18 if rhythm and rhythm["per_bar"] else 0
+    xs = [gutter + 18 + ts_width + i * col_step for i in range(len(cols))]
     width = xs[-1] + 30
     height = y(d_lo) + 8
+
+    times_list = [c["start"] for c in cols]
+    classes, measures = [], []
+    if rhythm:
+        import bisect
+
+        for i, t in enumerate(times_list):
+            nxt = (
+                times_list[i + 1] if i + 1 < len(times_list)
+                else min(float(end), t + rhythm["beat_len"])
+            )
+            classes.append(_dur_class((nxt - t) / rhythm["beat_len"]))
+            measures.append(bisect.bisect_right(downbeats, t))
     parts = [
         '<svg class="staff" viewBox="0 0 {w} {h}" width="{w}" '
         'height="{h}" xmlns="http://www.w3.org/2000/svg">'.format(
@@ -384,7 +471,10 @@ def staff_svg(events, start, end, *, col_step=26, gutter=48):
             y=y(22) + 1
         )
     )
-    for col, x in zip(cols, xs):
+    for ci, (col, x) in enumerate(zip(cols, xs)):
+        head_class = "sn"
+        if rhythm and classes[ci] in ("whole", "half"):
+            head_class = "sn open"
         for midi in col["midis"]:
             d, accidental = _diatonic(midi)
             ny = y(d)
@@ -424,14 +514,131 @@ def staff_svg(events, start, end, *, col_step=26, gutter=48):
                     )
                 )
             parts.append(
-                '<ellipse class="sn" cx="{x:.1f}" cy="{y}" rx="4.6" '
+                '<ellipse class="{cls}" cx="{x:.1f}" cy="{y}" rx="4.6" '
                 'ry="3.4"><title>{name} · {t}s</title></ellipse>'.format(
-                    x=x, y=ny, name=_esc(note_name(midi, flats=True)),
+                    cls=head_class, x=x, y=ny,
+                    name=_esc(note_name(midi, flats=True)),
                     t=round(float(col["start"]), 1),
                 )
             )
+
+    # -- rhythm layer: time signature, bar lines, stems, beams, flags -----
+    if rhythm:
+        if rhythm["per_bar"]:
+            for num_d, den_d in ((34, 30), (22, 18)):  # treble, bass
+                parts.append(
+                    '<text x="{x}" y="{y1}" class="tsig">{n}</text>'
+                    '<text x="{x}" y="{y2}" class="tsig">4</text>'.format(
+                        x=gutter + 2, y1=y(num_d) - 1, y2=y(den_d) - 1,
+                        n=rhythm["per_bar"],
+                    )
+                )
+        for i in range(1, len(cols)):
+            if measures[i] != measures[i - 1]:
+                bx = (xs[i - 1] + xs[i]) / 2.0
+                parts.append(
+                    '<line x1="{x:.1f}" y1="{t}" x2="{x:.1f}" y2="{b}" '
+                    'class="barline"/>'.format(x=bx, t=y(38), b=y(18))
+                )
+        for pred, middle in (
+            (lambda d: d >= 29, 34),  # treble, middle line B4
+            (lambda d: d < 29, 22),   # bass, middle line D3
+        ):
+            stems = {}
+            for i, (col, x) in enumerate(zip(cols, xs)):
+                ds = [
+                    _diatonic(m)[0] for m in col["midis"]
+                    if pred(_diatonic(m)[0])
+                ]
+                if not ds or classes[i] == "whole":
+                    continue
+                ys = [y(d) for d in ds]
+                up = (sum(ds) / len(ds)) < middle
+                if up:
+                    stems[i] = [x + 4.4, max(ys) - 1, min(ys) - 24, True]
+                else:
+                    stems[i] = [x - 4.4, min(ys) + 1, max(ys) + 24, False]
+            runs, cur = [], []
+            for i in sorted(stems):
+                if classes[i] not in ("eighth", "sixteenth"):
+                    if cur:
+                        runs.append(cur)
+                        cur = []
+                    # plain stem for quarters and halves
+                    sx, y_from, tip, _up = stems[i]
+                    parts.append(
+                        '<line x1="{x:.1f}" y1="{a:.1f}" x2="{x:.1f}" '
+                        'y2="{b:.1f}" class="stem"/>'.format(
+                            x=sx, a=y_from, b=tip
+                        )
+                    )
+                    continue
+                joinable = (
+                    cur
+                    and i == cur[-1] + 1
+                    and measures[i] == measures[cur[-1]]
+                    and stems[i][3] == stems[cur[-1]][3]
+                    and (times_list[i] - times_list[cur[-1]])
+                    < 0.75 * rhythm["beat_len"]
+                )
+                if joinable:
+                    cur.append(i)
+                else:
+                    if cur:
+                        runs.append(cur)
+                    cur = [i]
+            if cur:
+                runs.append(cur)
+            for run in runs:
+                up = stems[run[0]][3]
+                if len(run) == 1:
+                    i = run[0]
+                    sx, y_from, tip, _up = stems[i]
+                    parts.append(
+                        '<line x1="{x:.1f}" y1="{a:.1f}" x2="{x:.1f}" '
+                        'y2="{b:.1f}" class="stem"/>'.format(
+                            x=sx, a=y_from, b=tip
+                        )
+                    )
+                    flip = 1 if up else -1
+                    flags = 2 if classes[i] == "sixteenth" else 1
+                    for k in range(flags):
+                        parts.append(
+                            '<line x1="{x:.1f}" y1="{a:.1f}" x2="{x2:.1f}" '
+                            'y2="{b:.1f}" class="flag"/>'.format(
+                                x=sx, a=tip + flip * k * 5,
+                                x2=sx + 6.5, b=tip + flip * (k * 5 + 8),
+                            )
+                        )
+                    continue
+                tips = [stems[i][2] for i in run]
+                beam_y = min(tips) if up else max(tips)
+                for i in run:
+                    sx, y_from, _tip, _up = stems[i]
+                    parts.append(
+                        '<line x1="{x:.1f}" y1="{a:.1f}" x2="{x:.1f}" '
+                        'y2="{b:.1f}" class="stem"/>'.format(
+                            x=sx, a=y_from, b=beam_y
+                        )
+                    )
+                x0, x1 = stems[run[0]][0], stems[run[-1]][0]
+                parts.append(
+                    '<line x1="{a:.1f}" y1="{y:.1f}" x2="{b:.1f}" '
+                    'y2="{y:.1f}" class="beam"/>'.format(
+                        a=x0, b=x1, y=beam_y
+                    )
+                )
+                if all(classes[i] == "sixteenth" for i in run):
+                    y2 = beam_y + (5 if up else -5)
+                    parts.append(
+                        '<line x1="{a:.1f}" y1="{y:.1f}" x2="{b:.1f}" '
+                        'y2="{y:.1f}" class="beam"/>'.format(
+                            a=x0, b=x1, y=y2
+                        )
+                    )
+
     parts.append("</svg>")
-    return "".join(parts), [c["start"] for c in cols], xs
+    return "".join(parts), times_list, xs
 
 
 # -- page ------------------------------------------------------------------
@@ -621,8 +828,10 @@ def build(result, *, audio_path=None, chords=None):
                 ordered = sorted(
                     sec_events, key=lambda e: (float(e["start"]), e["midi"])
                 )
-                times = ",".join(
-                    str(round(float(e["start"]), 2)) for e in ordered
+                tab_times = [round(float(e["start"]), 2) for e in ordered]
+                times = ",".join(str(t) for t in tab_times)
+                tab_words = _words_row(
+                    lyr_segments, s_start, s_end, times=tab_times
                 )
                 variants, seen_tabs = [], set()
                 for pos_label, seed in (
@@ -651,11 +860,12 @@ def build(result, *, audio_path=None, chords=None):
                     '<div class="tabwrap" data-start="{t0}" '
                     'data-end="{t1}" data-times="{times}" data-lead="2" '
                     'data-colw="4"><div class="tabinner">'
-                    '<pre class="tab">{tab}</pre>'
+                    '<pre class="tab">{tab}</pre>{words}'
                     '<div class="roll-line tab-line"></div></div></div>'
                     "</div>".format(
                         act=" active" if i == 0 else "", i=i,
                         t0=s_start, t1=s_end, times=times, tab=_esc(tab_text),
+                        words=tab_words,
                     )
                     for i, (_lbl, tab_text) in enumerate(variants)
                 )
@@ -671,15 +881,26 @@ def build(result, *, audio_path=None, chords=None):
 
             # View 3 — grand-staff view, engraving-spaced and scrollable;
             # data-xs carries each column's exact x so the playhead sits
-            # on the notehead sounding now.
-            built = staff_svg(sec_events, s_start, s_end)
+            # on the notehead sounding now. The beat grid, when allin1
+            # produced one, adds time signature, bar lines, and beams.
+            built = staff_svg(
+                sec_events, s_start, s_end,
+                beats=[
+                    b for b in (structure.get("beat_times") or [])
+                    if s_start - 1 <= b < s_end + 1
+                ],
+                downbeats=[
+                    d for d in (structure.get("downbeat_times") or [])
+                    if s_start <= d < s_end
+                ],
+            )
             staff_view = '<p class="note">No notes transcribed here.</p>'
             if built:
                 st_svg, st_times, st_xs = built
                 staff_view = (
                     '<div class="tabwrap staffwrap" data-start="{t0}" '
                     'data-end="{t1}" data-times="{times}" data-xs="{xs}">'
-                    '<div class="tabinner">{staff}'
+                    '<div class="tabinner">{staff}{words}'
                     '<div class="roll-line tab-line"></div></div>'
                     "</div>".format(
                         t0=s_start, t1=s_end,
@@ -688,6 +909,10 @@ def build(result, *, audio_path=None, chords=None):
                         ),
                         xs=",".join(str(round(x, 1)) for x in st_xs),
                         staff=st_svg,
+                        words=_words_row(
+                            lyr_segments, s_start, s_end,
+                            times=st_times, xs=st_xs,
+                        ),
                     )
                 )
 
@@ -1021,6 +1246,21 @@ _TEMPLATE = """<!DOCTYPE html>
   .word.now {{ color: var(--accent); font-weight: 700;
     font-size: .78rem; z-index: 3; background: var(--card);
     max-width: 70%; }}
+  .word i {{ font-style: normal; }}
+  /* Inside sequence-spaced charts the span's own font must match the
+     chart's ch grid for left: Nch to land right; the visible text keeps
+     the small lyric size via the inner element. */
+  /* Match the pre's left padding so ch coordinates line up; the staff
+     svg starts flush left, so there the offset is zero. */
+  .tabinner .words {{ cursor: default; margin: .1rem 0 .3rem .9rem; }}
+  .staffwrap .words {{ margin-left: 0; }}
+  .tabinner .word {{
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .78rem; max-width: none; }}
+  .tabinner .word i {{
+    font: 500 .64rem/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      Inter, "Segoe UI", Roboto, sans-serif; }}
+  .tabinner .word.now i {{ font-weight: 700; }}
   .lyriclines .lline {{ margin: .3rem 0; cursor: pointer; }}
   .lline .lt {{ color: var(--muted); font-size: .7rem; margin-right: .6rem;
     font-variant-numeric: tabular-nums; }}
@@ -1045,6 +1285,13 @@ _TEMPLATE = """<!DOCTYPE html>
   .staff .acc {{ font-size: 10px; fill: var(--fg); }}
   .staff .sn {{ fill: var(--note); }}
   .staff .sn:hover {{ fill: var(--fg); }}
+  .staff .sn.open {{ fill: var(--card); stroke: var(--note);
+    stroke-width: 1.6; }}
+  .staff .stem {{ stroke: var(--note); stroke-width: 1.4; }}
+  .staff .beam {{ stroke: var(--note); stroke-width: 3.2; }}
+  .staff .flag {{ stroke: var(--note); stroke-width: 1.5; }}
+  .staff .barline {{ stroke: #b5ad9b; stroke-width: 1; }}
+  .staff .tsig {{ fill: var(--fg); font: 700 15px Georgia, serif; }}
 
   .tabfold {{ margin: .5rem 0 0; }}
   .tabfold summary {{ cursor: pointer; color: var(--muted);
@@ -1220,22 +1467,40 @@ jump there</div>
         colw: parseFloat(w.dataset.colw || 4)
       }};
       tabwraps.push(entry);
-      if (entry.xs) {{
-        // Engraving-spaced view: a click seeks to the nearest column.
-        w.addEventListener("click", function (e) {{
-          var inner = w.querySelector(".tabinner");
-          if (!inner || !entry.times.length) return;
+      // Every chart seeks on click: staff by nearest column x, tab by
+      // converting the click into monospace columns.
+      w.addEventListener("click", function (e) {{
+        if (!entry.times.length) return;
+        var inner = w.querySelector(".tabinner");
+        if (!inner) return;
+        var best = 0;
+        if (entry.xs) {{
           var x = e.clientX - inner.getBoundingClientRect().left;
-          var best = 0;
           for (var i = 1; i < entry.xs.length; i++) {{
             if (Math.abs(entry.xs[i] - x) < Math.abs(entry.xs[best] - x)) {{
               best = i;
             }}
           }}
-          player.currentTime = entry.times[best];
-          player.play();
-        }});
-      }}
+        }} else {{
+          var pre = inner.querySelector(".tab");
+          if (!pre) return;
+          var probe = document.createElement("span");
+          probe.style.cssText =
+            "position:absolute;visibility:hidden;width:1ch";
+          pre.appendChild(probe);
+          var chpx = probe.offsetWidth || 8;
+          pre.removeChild(probe);
+          var rect = pre.getBoundingClientRect();
+          var pad = parseFloat(getComputedStyle(pre).paddingLeft) || 0;
+          var xch = (e.clientX - rect.left - pad) / chpx;
+          best = Math.round(
+            (xch - entry.lead - entry.colw / 2) / entry.colw
+          );
+          best = Math.max(0, Math.min(entry.times.length - 1, best));
+        }}
+        player.currentTime = entry.times[best];
+        player.play();
+      }});
     }});
     var rolls = document.querySelectorAll(".rollwrap[data-start]");
     rolls.forEach(function (wrap) {{

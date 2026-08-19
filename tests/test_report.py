@@ -357,6 +357,34 @@ class NoteRollTests(unittest.TestCase):
         self.assertIn('class="word"', html)
         self.assertEqual(report._words_row(segs, 20.0, 30.0), "")
 
+    def test_words_land_on_sequence_columns(self):
+        segs = [{"start": 11.0, "end": 12.0, "text": "walking"}]
+        # Staff mode: halfway between the columns at 10s and 12s.
+        html = report._words_row(
+            segs, 8.0, 40.0, times=[10.0, 12.0], xs=[100.0, 200.0]
+        )
+        self.assertIn('style="left:150.0px"', html)
+        # Tab mode: same interpolation, in monospace columns.
+        html = report._words_row(segs, 8.0, 40.0, times=[10.0, 12.0])
+        self.assertIn('style="left:6.0ch"', html)
+
+    def test_words_appear_on_tab_and_staff_charts(self):
+        data = payload()
+        data["stages"]["lyrics"]["segments"] = [
+            {"start": 10.2, "end": 11.5, "text": "walking down"},
+        ]
+        data["stages"]["chords"] = {
+            "chords": [
+                {"start": 10.0, "end": 10.9, "symbol": "C",
+                 "shorthand": "x32010",
+                 "positions": [{"string": 5, "fret": 3}]},
+            ],
+            "notes": self.EVENTS,
+        }
+        html = report.build(data)
+        # One aligned words row per surface: roll + each tab variant + staff.
+        self.assertGreaterEqual(html.count('class="words"'), 3)
+
     def test_info_card_names_the_tools(self):
         html = report.build(payload())
         self.assertIn('id="infobtn"', html)
@@ -399,6 +427,40 @@ class NoteRollTests(unittest.TestCase):
         _svg, times, xs = report.staff_svg(events, 8.0, 40.0)
         self.assertEqual(len(times), 1)
         self.assertEqual(len(xs), 1)
+
+    def test_beat_grid_adds_time_signature_barlines_and_beams(self):
+        beats = [8.0 + 0.5 * i for i in range(20)]      # 120 BPM grid
+        downbeats = [8.0, 10.0, 12.0, 14.0, 16.0]       # 4 beats per bar
+        events = [
+            # Two eighths in one beat: should beam together.
+            {"start": 10.0, "end": 10.2, "midi": 64},
+            {"start": 10.25, "end": 10.45, "midi": 67},
+            # A quarter: plain stem, no flag.
+            {"start": 10.5, "end": 11.0, "midi": 65},
+            # An eighth cut off by the barline: no partner to beam with,
+            # so it gets a flag.
+            {"start": 11.75, "end": 11.9, "midi": 67},
+            # Next measure: a quarter, then a half -> open head.
+            {"start": 12.0, "end": 12.2, "midi": 64},
+            {"start": 12.5, "end": 13.5, "midi": 60},
+        ]
+        svg, _t, _x = report.staff_svg(
+            events, 8.0, 16.0, beats=beats, downbeats=downbeats
+        )
+        self.assertEqual(svg.count('class="tsig"'), 4)  # 4/4 on both staves
+        self.assertIn(">4</text>", svg)
+        self.assertIn('class="barline"', svg)
+        self.assertIn('class="beam"', svg)
+        self.assertIn('class="flag"', svg)
+        self.assertIn('class="sn open"', svg)           # the half note
+        self.assertIn('class="stem"', svg)
+
+    def test_no_beat_grid_stays_unmetered(self):
+        svg, _t, _x = report.staff_svg(
+            [{"start": 10.0, "end": 10.4, "midi": 60}], 8.0, 40.0
+        )
+        for cls in ("tsig", "barline", "beam", "flag", "stem"):
+            self.assertNotIn('class="{}"'.format(cls), svg)
 
     def test_middle_c_takes_one_ledger_not_a_tower(self):
         svg, _times, _xs = report.staff_svg(

@@ -245,3 +245,14 @@ class TranscriptSegmentTests(unittest.TestCase):
 
     def test_no_timing_anywhere_is_empty(self):
         self.assertEqual(local_tools.read_transcript_segments([]), [])
+
+
+class BeatGridTests(unittest.TestCase):
+    def test_summary_carries_the_full_beat_grids(self):
+        sample = dict(StructureSummaryTests.SAMPLE)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "song.json")
+            Path(path).write_text(json.dumps(sample), encoding="utf-8")
+            s = local_tools.summarize_structure(path)
+        self.assertEqual(s["beat_times"], [0.5, 1.0, 1.5, 2.0])
+        self.assertEqual(s["downbeat_times"], [0.5, 2.5])

@@ -276,6 +276,12 @@ def summarize_structure(json_path):
         "bpm": data.get("bpm"),
         "beats": len(data.get("beats") or []),
         "downbeats": len(data.get("downbeats") or []),
+        # The full grids too: the report needs them to draw a time
+        # signature, bar lines, and beamed rhythms on the staff.
+        "beat_times": [round(float(b), 2) for b in data.get("beats") or []],
+        "downbeat_times": [
+            round(float(b), 2) for b in data.get("downbeats") or []
+        ],
         "duration_seconds": round(sections[-1]["end"], 2) if sections else None,
         "section_count": len(sections),
         "arrangement": " → ".join(labels) if labels else None,

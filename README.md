@@ -77,7 +77,8 @@ An audio player whose timeline is the song's actual sections, and under it
 one panel per section that a single switcher flips between **piano roll**
 (every transcribed note, names aligned beneath), **guitar tab** (with a position selector — the audio cannot say which
 string was played, so pick the fingering that fits your hand), **sheet
-music** (grand staff), and the **chord chart** with textbook grips. A
+music** (grand staff with time signature, bar lines, and beamed
+rhythms read off allin1's beat grid), and the **chord chart** with textbook grips. A
 playhead runs through whichever view is up and flows section to section;
 lyrics are time-synced (karaoke line in the player, clickable lines below);
 space bar and arrow keys drive playback; everything clickable seeks. One
@@ -228,9 +229,9 @@ disk.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-286 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
+291 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 294.
+runs 299.
 
 The hosted-service tests are fully mocked — they verify this code's logic, not
 vendor behaviour. **No live API call has ever been made from this repository.**

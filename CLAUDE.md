@@ -26,7 +26,8 @@ tempo, arrangement, missing sections, chords as played, lyrics, and derived
 questions — plus `report.html`, a self-contained interactive play-along page:
 per-section panels a single switcher flips between piano roll (notes with
 names aligned beneath), guitar tab (alternate fingerings by neck position), grand-staff
-sheet music, and chord chart;
+sheet music with time signature, bar lines, and beamed rhythms from
+allin1's beat grid, and chord chart; lyrics ride every chart;
 a playhead runs through every view and follows into the next section;
 time-synced lyrics (karaoke line + clickable lines); keyboard transport.
 The report embeds a compact AAC preview as a data URI when ffmpeg is present
@@ -152,9 +153,9 @@ explicitly asks.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-286 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
+291 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 294.
+runs 299.
 
 `tests/fakes.py` fakes **only the socket** — it reuses the real host allow-list
 check and the real poll loop, so adapter tests exercise the genuine security
