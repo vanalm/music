@@ -227,6 +227,13 @@ class ChordSvgTests(unittest.TestCase):
         html = report.build(payload(), chords=[])
         self.assertNotIn("<h2>Chords</h2>", html)
 
+    def test_wide_voicing_draws_instead_of_crashing(self):
+        # A detected (not textbook) shape can span more than five frets.
+        positions = [{"string": 6, "fret": 12}, {"string": 5, "fret": 0},
+                     {"string": 1, "fret": 17}]
+        svg = report.chord_svg(positions)
+        self.assertIn("<svg", svg)
+
 
 class PlayerWiringTests(unittest.TestCase):
     def test_playhead_and_seek_script_present(self):

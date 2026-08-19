@@ -11,6 +11,8 @@ you sang — with the open questions spelled out.
 """
 
 import json
+import re
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -184,11 +186,15 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
     return result
 
 
-def detect_chords(note_events_path, *, min_duration=0.09, min_notes=3):
+def detect_chords(note_events_path, *, min_duration=0.09, min_notes=3,
+                  min_seconds=0.35):
     """Name the chords in a basic-pitch note_events file, with fingerings.
 
     ``min_notes=3`` because on a whole song two-note groupings are mostly
-    transcription bleed; real strummed chords bring at least a triad.
+    transcription bleed; real strummed chords bring at least a triad. And
+    ``min_seconds`` drops groupings that ring for less than a third of a
+    second — over four minutes those are strum transients and hammer-on
+    smear, and they bury the actual progression in noise.
     """
     from . import chords as chords_mod, notes as notes_mod
 
@@ -201,9 +207,12 @@ def detect_chords(note_events_path, *, min_duration=0.09, min_notes=3):
         chord = item.get("chord")
         if not chord or not chord.get("symbol"):
             continue
+        start, end = float(item["start"]), float(item["end"])
+        if end - start < min_seconds:
+            continue
         entry = {
-            "start": round(float(item["start"]), 2),
-            "end": round(float(item["end"]), 2),
+            "start": round(start, 2),
+            "end": round(end, 2),
             "symbol": chord["symbol"],
         }
         voicing = item.get("voicing")
@@ -214,12 +223,50 @@ def detect_chords(note_events_path, *, min_duration=0.09, min_notes=3):
     return out
 
 
+_ROOT_RE = re.compile(r"^([A-G][#b]?)")
+
+
+def _root(symbol):
+    match = _ROOT_RE.match(symbol or "")
+    return match.group(1) if match else symbol
+
+
+def canonical_shapes(chords, *, symbols=None):
+    """One fingering per chord symbol: the most frequently detected one.
+
+    Transcribing a whole song yields dozens of near-identical voicings per
+    chord; a hand learning the song wants one. Returns
+    ``[(symbol, shorthand, positions)…]`` sorted by symbol, optionally
+    restricted to *symbols*.
+    """
+    counts = Counter()
+    sample = {}
+    for c in chords or []:
+        sym, short = c.get("symbol"), c.get("shorthand")
+        if not sym or not short:
+            continue
+        if symbols is not None and sym not in symbols:
+            continue
+        counts[(sym, short)] += 1
+        sample.setdefault((sym, short), c.get("positions"))
+    best = {}
+    for (sym, short), n in counts.items():
+        if sym not in best or n > best[sym][1]:
+            best[sym] = (short, n)
+    return sorted(
+        (sym, short, sample[(sym, short)])
+        for sym, (short, _n) in best.items()
+    )
+
+
 def progression_by_section(chords, sections):
     """Group named chords under the structure's sections, deduped in place.
 
     Returns ``[(label, start_seconds, [symbols…])…]``. Without *sections*
-    everything lands under one ``None`` label. Consecutive repeats collapse:
-    a bar of strumming is one chord, not sixteen.
+    everything lands under one ``None`` label. A run of chords on the same
+    root collapses to that run's most frequent symbol: a bar of strumming
+    where the transcription flickers C · Csus2 · C5 is one C, not three
+    chords — the flicker is pick attack, not harmony.
     """
     if not chords:
         return []
@@ -230,14 +277,20 @@ def progression_by_section(chords, sections):
 
     grouped = []
     for label, start, end in spans:
-        symbols = []
+        runs = []  # [(root, [symbols in the run])…]
         for c in chords:
-            when = c.get("start")
-            if when is None:
+            when, sym = c.get("start"), c.get("symbol")
+            if when is None or not sym:
                 continue  # lick-style entries carry no timeline position
-            if start <= float(when) < end and c.get("symbol"):
-                if not symbols or symbols[-1] != c["symbol"]:
-                    symbols.append(c["symbol"])
+            if start <= float(when) < end:
+                root = _root(sym)
+                if runs and runs[-1][0] == root:
+                    runs[-1][1].append(sym)
+                else:
+                    runs.append((root, [sym]))
+        symbols = [
+            Counter(run).most_common(1)[0][0] for _root_, run in runs
+        ]
         if symbols:
             grouped.append((label, start, symbols))
     return grouped
@@ -300,7 +353,9 @@ def render(result):
             )
         lines.append("")
         sections = (structure or {}).get("sections") if structure else None
+        shown = set()
         for label, start, symbols in progression_by_section(detected, sections):
+            shown.update(symbols)
             if label:
                 lines.append(
                     "- **{}** ({}) — {}".format(
@@ -309,20 +364,14 @@ def render(result):
                 )
             else:
                 lines.append("- {}".format(" · ".join(symbols)))
-        shapes = {
-            c["shorthand"]: c["symbol"]
-            for c in detected
-            if c.get("shorthand")
-        }
+        shapes = canonical_shapes(detected, symbols=shown or None)
         if shapes:
             lines += [
                 "",
                 "Shapes: "
                 + "  ".join(
                     "{} `{}`".format(sym, short)
-                    for short, sym in sorted(
-                        shapes.items(), key=lambda kv: kv[1]
-                    )
+                    for sym, short, _pos in shapes
                 ),
             ]
         norm_file = result["stages"].get("normalize", {}).get("file")

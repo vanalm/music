@@ -153,6 +153,39 @@ class DetectChordsTests(unittest.TestCase):
     def test_no_path_is_empty_not_an_error(self):
         self.assertEqual(brief.detect_chords(None), [])
 
+    def test_transient_fragments_are_dropped(self):
+        csv = (
+            "start_time_s,end_time_s,pitch_midi,velocity\n"
+            # Same triad but ringing for only 150ms: strum smear, not harmony.
+            "1.00,1.15,48,80\n1.02,1.15,52,80\n1.04,1.15,55,80\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "song_basic_pitch.csv"
+            path.write_text(csv, encoding="utf-8")
+            self.assertEqual(brief.detect_chords(path), [])
+
+
+class CanonicalShapesTests(unittest.TestCase):
+    def test_most_frequent_fingering_wins(self):
+        chords = [
+            {"symbol": "C", "shorthand": "x32010", "positions": [{"string": 5, "fret": 3}]},
+            {"symbol": "C", "shorthand": "x32010", "positions": [{"string": 5, "fret": 3}]},
+            {"symbol": "C", "shorthand": "x32x1x", "positions": [{"string": 5, "fret": 3}]},
+            {"symbol": "G", "shorthand": "320003", "positions": [{"string": 6, "fret": 3}]},
+        ]
+        shapes = brief.canonical_shapes(chords)
+        self.assertEqual([(s[0], s[1]) for s in shapes],
+                         [("C", "x32010"), ("G", "320003")])
+
+    def test_symbols_filter_restricts_the_set(self):
+        chords = [
+            {"symbol": "C", "shorthand": "x32010", "positions": []},
+            {"symbol": "G", "shorthand": "320003", "positions": []},
+        ]
+        shapes = brief.canonical_shapes(chords, symbols={"C"})
+        self.assertEqual(len(shapes), 1)
+        self.assertEqual(shapes[0][0], "C")
+
 
 class ChordsRenderTests(unittest.TestCase):
     def test_brief_renders_progression_and_shapes(self):

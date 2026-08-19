@@ -100,7 +100,9 @@ def chord_svg(positions, *, width=110, height=132):
     by_string = {p["string"]: p["fret"] for p in positions}
     fretted = [f for f in by_string.values() if f and f > 0]
     base = min(fretted) if fretted and min(fretted) > 1 else 1
-    n_frets = 5
+    # Wide enough for the widest voicing — a detected shape can span more
+    # than a textbook's five frets, and must draw rather than crash.
+    n_frets = max(5, (max(fretted) - base + 1) if fretted else 5)
 
     left, top, right, bottom = 18, 26, width - 12, height - 10
     string_x = {
@@ -287,10 +289,12 @@ def build(result, *, audio_path=None, chords=None):
     if chords:
         prog_html = ""
         rows = []
+        shown = set()
         norm_file = (stages.get("normalize") or {}).get("file")
         for label, start, symbols in brief_mod.progression_by_section(
             chords, sections
         ):
+            shown.update(symbols)
             span = next(
                 (s for s in sections if s["label"] == label
                  and float(s["start"]) == start), None,
@@ -314,19 +318,20 @@ def build(result, *, audio_path=None, chords=None):
             prog_html = (
                 '<ul class="progression">{}</ul>'.format("".join(rows))
             )
-        seen, cards = set(), []
-        for c in chords:
-            shorthand = c.get("shorthand")
-            positions = c.get("positions")
-            if not shorthand or not positions or shorthand in seen:
+        # One box per chord, the most frequently detected fingering — a
+        # hand learning the song wants one shape, not every strum variant.
+        cards = []
+        for sym, short, positions in brief_mod.canonical_shapes(
+            chords, symbols=shown or None
+        ):
+            if not positions:
                 continue
-            seen.add(shorthand)
             cards.append(
                 '<figure class="card">{svg}<figcaption>{sym}'
                 "<small>{short}</small></figcaption></figure>".format(
                     svg=chord_svg(positions),
-                    sym=_esc(c.get("symbol", "?")),
-                    short=_esc(shorthand),
+                    sym=_esc(sym),
+                    short=_esc(short),
                 )
             )
         if cards or prog_html:
