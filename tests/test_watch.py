@@ -5,8 +5,22 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from music_stack import watch
+
+# No test may post a real macOS notification; anything that wants one
+# injects its own notify_fn.
+_real_notify = watch.notify
+_quiet = mock.patch.object(watch, "notify", lambda *_a: None)
+
+
+def setUpModule():
+    _quiet.start()
+
+
+def tearDownModule():
+    _quiet.stop()
 
 
 def drop(tmp, name, data=b"RIFFfake"):
@@ -104,6 +118,30 @@ class ProcessTests(unittest.TestCase):
                               log=lambda *_a: None)
             done = sorted(p.name for p in (Path(tmp) / watch.DONE_DIR).iterdir())
             self.assertEqual(done, ["memo-1.m4a", "memo.m4a"])
+
+    def test_success_notifies_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = drop(tmp, "memo.m4a")
+            seen = []
+            watch.process(path, tmp, analyze_fn=fake_analyze,
+                          log=lambda *_a: None,
+                          notify_fn=lambda t, m: seen.append(m))
+            self.assertTrue(any("done" in m for m in seen))
+
+    def test_failure_notifies_too(self):
+        def boom(root, path, log=print):
+            raise RuntimeError("corrupt file")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = drop(tmp, "bad.m4a")
+            seen = []
+            watch.process(path, tmp, analyze_fn=boom, log=lambda *_a: None,
+                          notify_fn=lambda t, m: seen.append(m))
+            self.assertTrue(any("FAILED" in m for m in seen))
+
+    def test_notify_survives_a_missing_osascript(self):
+        with mock.patch.object(watch.shutil, "which", return_value=None):
+            self.assertIsNone(_real_notify("t", "m"))
 
 
 class RunOnceTests(unittest.TestCase):

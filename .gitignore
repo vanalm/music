@@ -19,3 +19,5 @@ dist/
 
 # macOS
 .DS_Store
+watch.log
+watch-launchd.log

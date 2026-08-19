@@ -9,6 +9,7 @@ read — ``workflows`` and ``models`` exist so you can look before you pay.
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from . import (__version__, audio, brief, chords as chords_mod, local_tools,
@@ -138,14 +139,29 @@ def cmd_watch(args, settings):
     from . import watch as watch_mod
 
     drop_dir = Path(args.dir or (settings.root / "dropbox"))
+
+    # The watcher usually runs unattended (launchd, a backgrounded shell), so
+    # every line is flushed immediately and mirrored to watch.log — a stalled
+    # or silent watcher must leave evidence somewhere findable.
+    log_path = settings.root / "watch.log"
+
+    def log(message):
+        line = "[{}] {}".format(time.strftime("%Y-%m-%d %H:%M:%S"), message)
+        print(line, flush=True)
+        try:
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
+
     if args.once:
         drop_dir.mkdir(parents=True, exist_ok=True)
-        results = watch_mod.run_once(drop_dir, settings.projects_dir)
+        results = watch_mod.run_once(drop_dir, settings.projects_dir, log=log)
         if not results:
-            print("nothing to process in {}".format(drop_dir))
+            log("nothing to process in {}".format(drop_dir))
         return 0
     watch_mod.run_forever(
-        drop_dir, settings.projects_dir, interval=args.interval
+        drop_dir, settings.projects_dir, interval=args.interval, log=log
     )
     return 0
 

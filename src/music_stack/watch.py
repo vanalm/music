@@ -19,10 +19,31 @@ Two details that matter more than they look:
 """
 
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
 from .errors import MusicStackError
+
+
+def notify(title, message):
+    """Post a macOS notification, silently doing nothing when unavailable.
+
+    The watcher runs unattended in the background; without this, a finished
+    or failed drop is invisible unless someone is tailing the log.
+    """
+    osascript = shutil.which("osascript")
+    if not osascript:
+        return
+    script = 'display notification "{}" with title "{}"'.format(
+        str(message).replace("\\", "\\\\").replace('"', '\\"'),
+        str(title).replace("\\", "\\\\").replace('"', '\\"'),
+    )
+    try:
+        subprocess.run([osascript, "-e", script], capture_output=True,
+                       timeout=10)
+    except Exception:
+        pass
 
 #: What counts as droppable audio (or video carrying audio).
 AUDIO_SUFFIXES = (
@@ -78,7 +99,8 @@ def _move_to(path, subdir):
     return dest
 
 
-def process(path, projects_root, *, analyze_fn=None, log=print):
+def process(path, projects_root, *, analyze_fn=None, log=print,
+            notify_fn=None):
     """Analyze one dropped file and file the original under ``done/``.
 
     Returns the ``analyze`` result dict, or ``None`` when the file failed and
@@ -90,11 +112,15 @@ def process(path, projects_root, *, analyze_fn=None, log=print):
 
         analyze_fn = brief.analyze
     path = Path(path)
+    if notify_fn is None:
+        notify_fn = notify
+    notify_fn("music-stack", "analyzing {}…".format(path.name))
     try:
         result = analyze_fn(projects_root, path, log=log)
     except Exception as exc:
         log("FAILED {}: {}".format(path.name, exc))
         _move_to(path, FAILED_DIR)
+        notify_fn("music-stack", "FAILED {} — moved to failed/".format(path.name))
         return None
     _move_to(path, DONE_DIR)
     log(
@@ -102,11 +128,14 @@ def process(path, projects_root, *, analyze_fn=None, log=print):
             path.name, result.get("report_path") or result.get("brief_path")
         )
     )
+    notify_fn(
+        "music-stack", "done: {} — report is ready".format(path.name)
+    )
     return result
 
 
 def run_once(drop_dir, projects_root, *, analyze_fn=None, log=print,
-             stability_wait=1.0, sleep=time.sleep):
+             stability_wait=1.0, sleep=time.sleep, notify_fn=None):
     """Process everything currently in the folder. Returns the results."""
     results = []
     for candidate in scan(drop_dir):
@@ -114,13 +143,14 @@ def run_once(drop_dir, projects_root, *, analyze_fn=None, log=print,
             log("waiting for {} to finish copying…".format(candidate.name))
             continue
         results.append(
-            process(candidate, projects_root, analyze_fn=analyze_fn, log=log)
+            process(candidate, projects_root, analyze_fn=analyze_fn, log=log,
+                    notify_fn=notify_fn)
         )
     return results
 
 
 def run_forever(drop_dir, projects_root, *, interval=3.0, analyze_fn=None,
-                log=print, sleep=time.sleep):
+                log=print, sleep=time.sleep, notify_fn=None):
     """Poll until interrupted. Ctrl-C exits cleanly."""
     drop_dir = Path(drop_dir)
     drop_dir.mkdir(parents=True, exist_ok=True)
@@ -128,7 +158,7 @@ def run_forever(drop_dir, projects_root, *, interval=3.0, analyze_fn=None,
     try:
         while True:
             run_once(drop_dir, projects_root, analyze_fn=analyze_fn, log=log,
-                     sleep=sleep)
+                     sleep=sleep, notify_fn=notify_fn)
             sleep(interval)
     except KeyboardInterrupt:
         log("\nstopped.")
