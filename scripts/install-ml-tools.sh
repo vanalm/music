@@ -98,12 +98,19 @@ say "allin1 (structure, tempo, sections)"
 if command -v allin1 >/dev/null 2>&1; then
   echo "    already installed"
 elif ensure_tools_venv; then
-  # natten's setup.py imports torch, so it must see the venv's torch:
-  # install torch first and disable pip's build isolation for natten.
-  if "$TOOLS_VENV/bin/pip" install -q torch \
+  # Ordering matters, painfully:
+  #   * torch is pinned to 2.1.x — natten 0.14.6 is C++ from the same era
+  #     and does not compile against newer torch headers.
+  #   * natten's setup.py imports torch, hence --no-build-isolation.
+  #   * allin1 must go BEFORE the natten pin: its resolver drags in the
+  #     newest natten, which then needs to be forced back down.
+  # setuptools<81: natten's un-isolated build imports pkg_resources,
+  # which setuptools 81+ removed.
+  if "$TOOLS_VENV/bin/pip" install -q "setuptools<81" wheel "torch==2.1.*" \
      && "$TOOLS_VENV/bin/pip" install -q "git+https://github.com/CPJKU/madmom" \
-     && "$TOOLS_VENV/bin/pip" install -q --no-build-isolation "natten==0.14.6" \
      && "$TOOLS_VENV/bin/pip" install -q allin1 \
+     && "$TOOLS_VENV/bin/pip" install -q --no-build-isolation \
+          --force-reinstall --no-deps "natten==0.14.6" \
      && "$TOOLS_VENV/bin/python" -c "import allin1" 2>/dev/null; then
     link_tool allin1
   else
