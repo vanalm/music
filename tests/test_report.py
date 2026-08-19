@@ -260,10 +260,12 @@ class PlayerWiringTests(unittest.TestCase):
         self.assertIn("dataset.start", html)
 
     def test_light_professional_palette(self):
-        # The page deliberately commits to one light editorial look.
+        # The page deliberately commits to one warm editorial look:
+        # paper ground, terracotta accents, slate-blue notes.
         html = report.build(payload())
-        self.assertIn("--card: #ffffff", html)
-        self.assertIn("--accent: #4f46e5", html)
+        self.assertIn("--card: #fffdf8", html)
+        self.assertIn("--accent: #bc5a3c", html)
+        self.assertIn("--note: #54677d", html)
 
     def test_keyboard_hints_are_shown(self):
         self.assertIn("<kbd>space</kbd>", report.build(payload()))
@@ -381,6 +383,38 @@ class NoteRollTests(unittest.TestCase):
             [{"start": 10.0, "end": 10.4, "midi": 60}], 8.0, 40.0
         )
         self.assertEqual(svg.count('class="ledger"'), 1)
+
+    def test_tab_offers_alternate_positions_with_a_selector(self):
+        # A midrange melody is playable in several neck positions, so the
+        # view carries multiple deduped fingerings and a selector.
+        data = payload()
+        data["stages"]["chords"] = {
+            "chords": [
+                {"start": 10.0, "end": 10.9, "symbol": "C",
+                 "shorthand": "x32010",
+                 "positions": [{"string": 5, "fret": 3}]},
+            ],
+            "notes": [
+                {"start": 10.0, "end": 10.4, "midi": 64},
+                {"start": 10.5, "end": 10.9, "midi": 67},
+                {"start": 11.0, "end": 11.4, "midi": 60},
+            ],
+        }
+        html = report.build(data)
+        self.assertIn('class="posbar"', html)
+        self.assertGreaterEqual(html.count('class="tabvar'), 2)
+        self.assertIn(">5th<", html)
+
+    def test_position_seed_moves_the_fingering_up_the_neck(self):
+        from music_stack import notes as notes_mod
+        events = [{"start": 0.0, "end": 0.5, "midi": 64}]  # E4
+        low = notes_mod.choose_positions(
+            events, strings=(1, 2, 3, 4, 5, 6))
+        high = notes_mod.choose_positions(
+            events, strings=(1, 2, 3, 4, 5, 6), prefer_fret=9)
+        self.assertEqual(low[0]["fret"], 0)     # open high E
+        self.assertEqual(high[0]["fret"], 9)    # same E4 on the G string
+        self.assertEqual(high[0]["string"], 3)
 
     def test_tab_views_carry_note_times_for_the_playhead(self):
         data = payload()

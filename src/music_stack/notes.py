@@ -142,15 +142,20 @@ def guitar_positions(midi, strings=TOP_THREE, tuning=None, max_fret=MAX_FRET):
     return sorted(out, key=lambda p: p["fret"])
 
 
-def choose_positions(events, strings=TOP_THREE, tuning=None):
+def choose_positions(events, strings=TOP_THREE, tuning=None, prefer_fret=None):
     """Pick one playable position per note, keeping the hand in one place.
 
     A greedy pass that prefers the fret nearest the previous note's fret. It is
     not a full fingering optimiser, but for a short single-position lick it
     lands where a player's hand would actually be.
+
+    ``prefer_fret`` seeds where the hand starts: the first note is taken
+    nearest that fret and the hand drifts from there. Different seeds give
+    the same notes in different neck positions — none of them is "the"
+    fingering, because the audio cannot say which string was played.
     """
     chosen = []
-    anchor = None
+    anchor = prefer_fret
     for e in events:
         options = guitar_positions(e["midi"], strings=strings, tuning=tuning)
         if not options:

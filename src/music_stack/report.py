@@ -597,32 +597,62 @@ def build(result, *, audio_path=None, chords=None):
                     )
                 )
 
-            # View 2 — every note as guitar tab, hand kept in position. The
-            # data-times list lets the script walk a playhead through the
-            # text, one monospace column per note.
+            # View 2 — every note as guitar tab. The audio cannot say which
+            # string was played, so offer the same notes in several neck
+            # positions and let the hand choose. data-times lets the script
+            # walk a playhead through the text, one monospace column each.
             tab_view = '<p class="note">No notes transcribed here.</p>'
             if sec_events:
                 ordered = sorted(
                     sec_events, key=lambda e: (float(e["start"]), e["midi"])
                 )
-                positioned = notes_mod.choose_positions(
-                    ordered, strings=(1, 2, 3, 4, 5, 6)
-                )
                 times = ",".join(
                     str(round(float(e["start"]), 2)) for e in ordered
                 )
-                tab_view = (
-                    '<div class="tabwrap" data-start="{t0}" data-end="{t1}" '
-                    'data-times="{times}" data-lead="2" data-colw="4">'
-                    '<div class="tabinner"><pre class="tab">{tab}</pre>'
-                    '<div class="roll-line tab-line"></div></div>'
-                    "</div>".format(
-                        t0=s_start, t1=s_end, times=times,
-                        tab=_esc(notes_mod.render_tab(
-                            positioned, strings=(1, 2, 3, 4, 5, 6), width=3
-                        )),
+                variants, seen_tabs = [], set()
+                for pos_label, seed in (
+                    ("low", None), ("5th", 5), ("9th", 9)
+                ):
+                    tab_text = notes_mod.render_tab(
+                        notes_mod.choose_positions(
+                            ordered, strings=(1, 2, 3, 4, 5, 6),
+                            prefer_fret=seed,
+                        ),
+                        strings=(1, 2, 3, 4, 5, 6), width=3,
                     )
+                    if tab_text in seen_tabs:
+                        continue
+                    seen_tabs.add(tab_text)
+                    variants.append((pos_label, tab_text))
+                buttons = "".join(
+                    '<button type="button" class="postab{act}" '
+                    'data-pos="{i}">{lbl}</button>'.format(
+                        act=" active" if i == 0 else "", i=i, lbl=_esc(lbl)
+                    )
+                    for i, (lbl, _t) in enumerate(variants)
                 )
+                bodies = "".join(
+                    '<div class="tabvar{act}" data-pos="{i}">'
+                    '<div class="tabwrap" data-start="{t0}" '
+                    'data-end="{t1}" data-times="{times}" data-lead="2" '
+                    'data-colw="4"><div class="tabinner">'
+                    '<pre class="tab">{tab}</pre>'
+                    '<div class="roll-line tab-line"></div></div></div>'
+                    "</div>".format(
+                        act=" active" if i == 0 else "", i=i,
+                        t0=s_start, t1=s_end, times=times, tab=_esc(tab_text),
+                    )
+                    for i, (_lbl, tab_text) in enumerate(variants)
+                )
+                selector = ""
+                if len(variants) > 1:
+                    selector = (
+                        '<div class="posbar" title="The recording cannot '
+                        "say which string was played — same notes, "
+                        'different neck positions">'
+                        '<span class="poslabel">position</span>{}</div>'
+                    ).format(buttons)
+                tab_view = selector + bodies
 
             # View 3 — treble-staff pitch view.
             staff = staff_svg(sec_events, s_start, s_end)
@@ -784,12 +814,13 @@ _TEMPLATE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <style>
-  /* A deliberately light, editorial surface: white cards on a warm gray
-     page, one indigo accent, hairline borders instead of heavy shadows. */
+  /* A deliberately light, editorial surface: warm paper, soft ink,
+     terracotta for the interactive layer, slate-blue for the notes
+     themselves, hairline borders instead of heavy shadows. */
   :root {{
-    --bg: #f6f7f9; --card: #ffffff; --fg: #16181d; --muted: #667085;
-    --line: #e4e7ec; --accent: #4f46e5; --accent-soft: #eef0fe;
-    --panel: #f2f4f7;
+    --bg: #f7f5f0; --card: #fffdf8; --fg: #2a2722; --muted: #877f6f;
+    --line: #e6e0d2; --accent: #bc5a3c; --accent-soft: #f7e9e2;
+    --panel: #f1ede2; --note: #54677d;
   }}
   * {{ box-sizing: border-box; }}
   html {{ scroll-behavior: smooth; }}
@@ -830,7 +861,7 @@ _TEMPLATE = """<!DOCTYPE html>
   .seg {{
     display: flex; align-items: center; justify-content: center;
     min-width: 1.4rem; font-size: .68rem; font-weight: 650; color: #fff;
-    background: hsl(var(--hue,210) 48% 52%);
+    background: hsl(var(--hue,210) 30% 50%);
     border-right: 1px solid rgb(255 255 255 / .4);
   }}
   .seg:hover {{ filter: brightness(1.12); }}
@@ -843,8 +874,8 @@ _TEMPLATE = """<!DOCTYPE html>
   }}
   .arrangement {{ color: var(--muted); font-size: .82rem; margin-top: .6rem; }}
   .missing {{ font-size: .85rem; color: var(--muted); margin-top: .3rem; }}
-  .missing .chip {{ background: #fef3f2; color: #b42318;
-    border: 1px solid #fecdca; }}
+  .missing .chip {{ background: #f9ece7; color: #a2401f;
+    border: 1px solid #ecccbd; }}
 
   .card-block {{
     background: var(--card); border: 1px solid var(--line);
@@ -875,7 +906,7 @@ _TEMPLATE = """<!DOCTYPE html>
   .seclabel {{
     font-size: .72rem; font-weight: 700; letter-spacing: .04em;
     text-transform: uppercase; color: #fff; padding: .12rem .6rem;
-    border-radius: 999px; background: hsl(var(--hue,210) 48% 52%);
+    border-radius: 999px; background: hsl(var(--hue,210) 28% 48%);
   }}
   .range {{ color: var(--muted); font-size: .8rem;
     font-variant-numeric: tabular-nums; }}
@@ -895,15 +926,15 @@ _TEMPLATE = """<!DOCTYPE html>
 
   .rollwrap {{ position: relative; margin: .6rem 0; cursor: crosshair;
     border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
-    background: linear-gradient(180deg, #fcfcfd, #f8f9fb); }}
+    background: linear-gradient(180deg, #fffdf9, #faf7f0); }}
   .roll {{ display: block; }}
   .roll .octave {{ stroke: var(--line); stroke-width: 1; }}
   .roll .octlabel {{ fill: var(--muted); font: 600 9px sans-serif; }}
-  .roll .nr {{ fill: var(--accent); }}
-  .roll .nr:hover {{ fill: #16181d; }}
+  .roll .nr {{ fill: var(--note); }}
+  .roll .nr:hover {{ fill: var(--fg); }}
   .roll-line {{
     position: absolute; top: 0; bottom: 0; left: 0; width: 1.5px;
-    background: #e11d48; display: none; pointer-events: none;
+    background: var(--accent); display: none; pointer-events: none;
   }}
 
   .tophead {{ display: flex; align-items: center; gap: 1rem;
@@ -927,6 +958,18 @@ _TEMPLATE = """<!DOCTYPE html>
     font-weight: 600; box-shadow: 0 1px 2px rgb(16 24 40 / .1); }}
   .view {{ display: none; margin-top: .6rem; }}
   .view.active {{ display: block; }}
+  .posbar {{ display: flex; align-items: center; gap: .35rem;
+    margin-bottom: .45rem; }}
+  .poslabel {{ color: var(--muted); font-size: .72rem;
+    text-transform: uppercase; letter-spacing: .07em; }}
+  .postab {{ border: 1px solid var(--line); background: var(--card);
+    border-radius: 999px; padding: .1rem .6rem; font: inherit;
+    font-size: .74rem; color: var(--muted); cursor: pointer; }}
+  .postab:hover {{ border-color: var(--accent); color: var(--accent); }}
+  .postab.active {{ background: var(--accent); border-color: var(--accent);
+    color: #fff; }}
+  .tabvar {{ display: none; }}
+  .tabvar.active {{ display: block; }}
 
   .namesline {{ position: relative; height: 3.4rem; margin-top: .15rem; }}
   .ncol {{ position: absolute; top: 0; transform: translateX(-50%);
@@ -967,15 +1010,15 @@ _TEMPLATE = """<!DOCTYPE html>
     overflow: visible; }}
   .tab-line {{ display: none; margin-left: .9rem; }}
 
-  .staffwrap {{ cursor: crosshair; background: #fff; }}
+  .staffwrap {{ cursor: crosshair; background: var(--card); }}
   .staff {{ display: block; }}
-  .staff .sline {{ stroke: #98a2b3; stroke-width: 1; }}
-  .staff .ledger {{ stroke: #98a2b3; stroke-width: 1; }}
+  .staff .sline {{ stroke: #b5ad9b; stroke-width: 1; }}
+  .staff .ledger {{ stroke: #b5ad9b; stroke-width: 1; }}
   .staff .clef {{ font-size: 40px; fill: var(--fg); }}
   .staff .bclef {{ font-size: 30px; }}
   .staff .acc {{ font-size: 10px; fill: var(--fg); }}
-  .staff .sn {{ fill: var(--accent); }}
-  .staff .sn:hover {{ fill: #16181d; }}
+  .staff .sn {{ fill: var(--note); }}
+  .staff .sn:hover {{ fill: var(--fg); }}
 
   .tabfold {{ margin: .5rem 0 0; }}
   .tabfold summary {{ cursor: pointer; color: var(--muted);
@@ -1008,7 +1051,7 @@ _TEMPLATE = """<!DOCTYPE html>
   .card small {{ display: block; font-weight: 500; color: var(--muted);
     font-size: .72rem; margin-top: .1rem; }}
   .chordbox {{ width: 100%; max-width: 110px; height: auto; }}
-  .chordbox .fret, .chordbox .string {{ stroke: #d0d5dd; stroke-width: 1; }}
+  .chordbox .fret, .chordbox .string {{ stroke: #d8d0bf; stroke-width: 1; }}
   .chordbox .nut {{ stroke: var(--fg); stroke-width: 3; }}
   .chordbox .dot {{ fill: var(--fg); }}
   .chordbox .open {{ fill: none; stroke: var(--fg); stroke-width: 1.5; }}
@@ -1044,7 +1087,10 @@ each section's <code>music-stack lick</code> command re-transcribes just
 that span for note-perfect tab, scale, and sheet music.</p>
 <p><b>Accuracy</b> — transcription is machine listening on a full mix:
 trust the progression and timing, and verify oddball chords or fast licks
-with <code>lick</code> on a tight time window.</p>
+with <code>lick</code> on a tight time window. Tab fingerings are
+suggestions — the recording cannot say which string was played, so the
+position selector offers the same notes in different places on the
+neck.</p>
 </div>
 <div class="playerbar">
 {audio}
@@ -1090,6 +1136,23 @@ jump there</div>
         infoCard.hidden = !infoCard.hidden;
       }});
     }}
+    document.querySelectorAll(".view[data-view=gtab]").forEach(
+      function (view) {{
+        var btns = view.querySelectorAll(".postab");
+        btns.forEach(function (btn) {{
+          btn.addEventListener("click", function () {{
+            btns.forEach(function (b) {{
+              b.classList.toggle("active", b === btn);
+            }});
+            view.querySelectorAll(".tabvar").forEach(function (tv) {{
+              tv.classList.toggle(
+                "active", tv.dataset.pos === btn.dataset.pos
+              );
+            }});
+          }});
+        }});
+      }}
+    );
     if (!player) return;
     document.querySelectorAll(
       ".seg[data-start], .chip[data-start], .ncol[data-start], " +
