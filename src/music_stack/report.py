@@ -535,6 +535,22 @@ _TEMPLATE = """<!DOCTYPE html>
         el.classList.toggle("now", on);
       }});
     }});
+    document.addEventListener("keydown", function (e) {{
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.code === "Space") {{
+        e.preventDefault();
+        if (player.paused) player.play(); else player.pause();
+      }} else if (e.code === "ArrowRight") {{
+        e.preventDefault();
+        player.currentTime = Math.min(
+          player.duration || player.currentTime + 1,
+          player.currentTime + 1
+        );
+      }} else if (e.code === "ArrowLeft") {{
+        e.preventDefault();
+        player.currentTime = Math.max(0, player.currentTime - 1);
+      }}
+    }});
   }})();
 </script>
 </body>

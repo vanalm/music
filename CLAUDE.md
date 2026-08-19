@@ -132,6 +132,11 @@ explicitly asks.
   on coverage alone.
 - **Voicings are descriptive.** They finger the notes actually detected, not a
   textbook shape, and return `None` when the notes cannot be one hand position.
+- **…except in song-level charts, which prefer textbook grips.** The lick path
+  keeps descriptive voicings (you asked what was played); the report and brief
+  swap in `chords.textbook_shape()` for common chords, because transcription
+  noise fingered literally looks like nothing a player would grab. Oddball
+  chords still fall back to the detected voicing.
 - **MusicXML quantises to a sixteenth grid.** Rubato, swing, and triplets
   notate squarer than played. The MIDI keeps raw timing — prefer it when rhythm
   matters more than reading.
@@ -142,9 +147,9 @@ explicitly asks.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-257 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
+263 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 265.
+runs 271.
 
 `tests/fakes.py` fakes **only the socket** — it reuses the real host allow-list
 check and the real poll loop, so adapter tests exercise the genuine security

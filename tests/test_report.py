@@ -238,6 +238,12 @@ class ChordSvgTests(unittest.TestCase):
         html = report.build(payload(), chords=[])
         self.assertNotIn("<h2>Chords</h2>", html)
 
+    def test_keyboard_controls_are_wired(self):
+        html = report.build(payload())
+        self.assertIn('e.code === "Space"', html)
+        self.assertIn('e.code === "ArrowRight"', html)
+        self.assertIn('e.code === "ArrowLeft"', html)
+
     def test_wide_voicing_draws_instead_of_crashing(self):
         # A detected (not textbook) shape can span more than five frets.
         positions = [{"string": 6, "fret": 12}, {"string": 5, "fret": 0},

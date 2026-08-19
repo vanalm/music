@@ -177,7 +177,39 @@ class DetectChordsTests(unittest.TestCase):
             self.assertEqual(brief.detect_chords(path), [])
 
 
+class TextbookShapeTests(unittest.TestCase):
+    def test_open_chords_get_their_standard_grips(self):
+        from music_stack import chords as chords_mod
+        self.assertEqual(chords_mod.shorthand(chords_mod.textbook_shape("Am")), "x02210")
+        self.assertEqual(chords_mod.shorthand(chords_mod.textbook_shape("F")), "133211")
+        self.assertEqual(chords_mod.shorthand(chords_mod.textbook_shape("G7")), "320001")
+
+    def test_slash_bass_uses_the_plain_grip(self):
+        from music_stack import chords as chords_mod
+        self.assertEqual(
+            chords_mod.textbook_shape("Am/E"), chords_mod.textbook_shape("Am")
+        )
+
+    def test_barre_forms_cover_the_rest(self):
+        from music_stack import chords as chords_mod
+        # Bm: A-form barre at 2 -> x24432.
+        self.assertEqual(chords_mod.shorthand(chords_mod.textbook_shape("Bm")), "x24432")
+
+    def test_exotic_chords_have_no_textbook_answer(self):
+        from music_stack import chords as chords_mod
+        self.assertIsNone(chords_mod.textbook_shape("C69/G"))
+        self.assertIsNone(chords_mod.textbook_shape("not-a-chord"))
+
+
 class CanonicalShapesTests(unittest.TestCase):
+    def test_textbook_grip_replaces_a_weird_detected_voicing(self):
+        chords = [
+            {"symbol": "Am", "shorthand": "5775x5",
+             "positions": [{"string": 6, "fret": 5}]},
+        ]
+        shapes = brief.canonical_shapes(chords)
+        self.assertEqual(shapes[0][1], "x02210")
+
     def test_most_frequent_fingering_wins(self):
         chords = [
             {"symbol": "C", "shorthand": "x32010", "positions": [{"string": 5, "fret": 3}]},

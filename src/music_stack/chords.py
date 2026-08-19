@@ -13,6 +13,7 @@ question being answered is "what did I do there", not "how is this chord
 normally voiced".
 """
 
+import re
 from itertools import combinations, permutations
 
 from .notes import FLAT, SHARP, STANDARD_TUNING, note_name, pitch_class
@@ -262,6 +263,83 @@ def shorthand(positions):
         else:
             out.append("({})".format(fret))
     return "".join(out)
+
+
+#: Open-position grips a guitarist actually reaches for, by exact symbol
+#: (slash bass stripped). Everything else goes through the movable forms.
+OPEN_SHAPES = {
+    "C": "x32010", "A": "x02220", "G": "320003", "E": "022100",
+    "D": "xx0232", "F": "133211",
+    "Am": "x02210", "Em": "022000", "Dm": "xx0231",
+    "A7": "x02020", "B7": "x21202", "C7": "x32310", "D7": "xx0212",
+    "E7": "020100", "G7": "320001",
+    "Am7": "x02010", "Em7": "022030", "Dm7": "xx0211",
+    "Cmaj7": "x32000", "Amaj7": "x02120", "Dmaj7": "xx0222",
+    "Emaj7": "021100", "Fmaj7": "xx3210", "Gmaj7": "320002",
+    "Asus2": "x02200", "Asus4": "x02230", "Dsus2": "xx0230",
+    "Dsus4": "xx0233", "Esus4": "022200",
+    "E5": "022xxx", "A5": "x022xx", "D5": "xx023x",
+}
+
+#: Movable barre forms: quality -> [(root string, frets low-E..high-e
+#: relative to the barre, None = muted)]. E-form first, A-form second.
+MOVABLE_SHAPES = {
+    "": [(6, (0, 2, 2, 1, 0, 0)), (5, (None, 0, 2, 2, 2, 0))],
+    "m": [(6, (0, 2, 2, 0, 0, 0)), (5, (None, 0, 2, 2, 1, 0))],
+    "7": [(6, (0, 2, 0, 1, 0, 0)), (5, (None, 0, 2, 0, 2, 0))],
+    "m7": [(6, (0, 2, 0, 0, 0, 0)), (5, (None, 0, 2, 0, 1, 0))],
+    "sus4": [(6, (0, 2, 2, 2, 0, 0)), (5, (None, 0, 2, 2, 3, 0))],
+    "5": [(6, (0, 2, 2, None, None, None)),
+          (5, (None, 0, 2, 2, None, None))],
+}
+
+_PC = {name: pc for pc, name in enumerate(SHARP)}
+_PC.update({name: pc for pc, name in enumerate(FLAT)})
+
+_SYMBOL_RE = re.compile(r"^([A-G][#b]?)(.*)$")
+
+
+def _positions_from_shorthand(short):
+    return [
+        {"string": 6 - i, "fret": int(ch)}
+        for i, ch in enumerate(short)
+        if ch != "x"
+    ]
+
+
+def textbook_shape(symbol):
+    """The standard grip for *symbol*, or ``None`` when there isn't one.
+
+    The detected voicings are honest about the notes but not about the
+    hand — transcription noise fingered literally looks like nothing a
+    player would grab. For song-level charts, a common chord should show
+    the grip everyone plays; only oddities fall back to the detected one.
+    Slash basses use the plain grip of the main chord.
+    """
+    core = (symbol or "").split("/")[0]
+    if core in OPEN_SHAPES:
+        return _positions_from_shorthand(OPEN_SHAPES[core])
+    match = _SYMBOL_RE.match(core)
+    if not match:
+        return None
+    root, quality = match.groups()
+    forms = MOVABLE_SHAPES.get(quality)
+    root_pc = _PC.get(root)
+    if not forms or root_pc is None:
+        return None
+    best = None
+    for root_string, rel in forms:
+        barre = (root_pc - pitch_class(STANDARD_TUNING[root_string])) % 12
+        if barre == 0:
+            barre = 12  # the open version would already be in OPEN_SHAPES
+        if best is None or barre < best[0]:
+            best = (barre, rel)
+    barre, rel = best
+    return [
+        {"string": 6 - i, "fret": barre + f}
+        for i, f in enumerate(rel)
+        if f is not None
+    ]
 
 
 def render_diagram(voicing, *, name=None, width=5):

@@ -232,13 +232,17 @@ def _root(symbol):
 
 
 def canonical_shapes(chords, *, symbols=None):
-    """One fingering per chord symbol: the most frequently detected one.
+    """One fingering per chord symbol — the one a player would use.
 
-    Transcribing a whole song yields dozens of near-identical voicings per
-    chord; a hand learning the song wants one. Returns
-    ``[(symbol, shorthand, positions)…]`` sorted by symbol, optionally
-    restricted to *symbols*.
+    A common chord gets its textbook grip: the transcription's literal
+    voicings are honest about the detected notes but not about the hand,
+    and a chart of them looks wrong to anyone who plays. Chords without a
+    standard grip fall back to the most frequently detected fingering.
+    Returns ``[(symbol, shorthand, positions)…]`` sorted by symbol,
+    optionally restricted to *symbols*.
     """
+    from . import chords as chords_mod
+
     counts = Counter()
     sample = {}
     for c in chords or []:
@@ -253,10 +257,14 @@ def canonical_shapes(chords, *, symbols=None):
     for (sym, short), n in counts.items():
         if sym not in best or n > best[sym][1]:
             best[sym] = (short, n)
-    return sorted(
-        (sym, short, sample[(sym, short)])
-        for sym, (short, _n) in best.items()
-    )
+    out = []
+    for sym, (short, _n) in best.items():
+        textbook = chords_mod.textbook_shape(sym)
+        if textbook:
+            out.append((sym, chords_mod.shorthand(textbook), textbook))
+        else:
+            out.append((sym, short, sample[(sym, short)]))
+    return sorted(out)
 
 
 def progression_events(chords, sections):
