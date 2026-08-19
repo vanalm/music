@@ -8,7 +8,8 @@ from pathlib import Path
 from music_stack import brief, local_tools
 
 
-def result_with(structure=None, lyrics=None, skipped=(), stems=None):
+def result_with(structure=None, lyrics=None, skipped=(), stems=None,
+                chords=None):
     """Build an analyze() result without needing any tool installed."""
     stages = {}
     if structure is not None:
@@ -17,6 +18,8 @@ def result_with(structure=None, lyrics=None, skipped=(), stems=None):
         stages["lyrics"] = lyrics
     if stems is not None:
         stages["stems"] = stems
+    if chords is not None:
+        stages["chords"] = chords
     return {
         "title": "Working Title",
         "slug": "working-title",
@@ -82,6 +85,68 @@ class RenderTests(unittest.TestCase):
         out = brief.render(result_with())
         self.assertIn("# Working Title", out)
         self.assertIn("To finish this", out)
+
+
+SAMPLE_CHORDS = [
+    {"start": 8.5, "end": 9.4, "symbol": "C",
+     "positions": [{"string": 5, "fret": 3}, {"string": 4, "fret": 2},
+                   {"string": 2, "fret": 1}],
+     "shorthand": "x32x1x"},
+    {"start": 10.0, "end": 10.9, "symbol": "C", "shorthand": "x32x1x",
+     "positions": [{"string": 5, "fret": 3}, {"string": 4, "fret": 2},
+                   {"string": 2, "fret": 1}]},
+    {"start": 12.0, "end": 12.8, "symbol": "Am", "shorthand": "x02210",
+     "positions": [{"string": 5, "fret": 0}, {"string": 4, "fret": 2},
+                   {"string": 3, "fret": 2}, {"string": 2, "fret": 1},
+                   {"string": 1, "fret": 0}]},
+    {"start": 41.0, "end": 41.8, "symbol": "F", "shorthand": "xx3211",
+     "positions": [{"string": 4, "fret": 3}, {"string": 3, "fret": 2},
+                   {"string": 2, "fret": 1}, {"string": 1, "fret": 1}]},
+]
+
+
+class ProgressionTests(unittest.TestCase):
+    def test_groups_by_section_and_collapses_repeats(self):
+        grouped = brief.progression_by_section(
+            SAMPLE_CHORDS, FULL_STRUCTURE["sections"]
+        )
+        by_label = {(label, start): syms for label, start, syms in grouped}
+        # C strummed twice collapses to one C; the F lands in the chorus.
+        self.assertEqual(by_label[("verse", 8.0)], ["C", "Am"])
+        self.assertEqual(by_label[("chorus", 40.0)], ["F"])
+
+    def test_no_sections_puts_everything_under_one_label(self):
+        grouped = brief.progression_by_section(SAMPLE_CHORDS, None)
+        self.assertEqual(len(grouped), 1)
+        label, _start, symbols = grouped[0]
+        self.assertIsNone(label)
+        self.assertEqual(symbols, ["C", "Am", "F"])
+
+    def test_empty_chords_is_empty_not_an_error(self):
+        self.assertEqual(brief.progression_by_section([], FULL_STRUCTURE["sections"]), [])
+
+
+class ChordsRenderTests(unittest.TestCase):
+    def test_brief_renders_progression_and_shapes(self):
+        text = brief.render(result_with(
+            structure=FULL_STRUCTURE,
+            chords={"chords": SAMPLE_CHORDS, "from_instrumental_stem": True},
+        ))
+        self.assertIn("## Chords as played", text)
+        self.assertIn("instrumental stem", text)
+        self.assertIn("C · Am", text)
+        self.assertIn("x02210", text)
+
+    def test_brief_offers_the_lick_command_when_audio_exists(self):
+        data = result_with(structure=FULL_STRUCTURE,
+                           chords={"chords": SAMPLE_CHORDS})
+        data["stages"]["normalize"] = {"file": "/tmp/p/normalized/song.wav"}
+        text = brief.render(data)
+        self.assertIn("music-stack lick --input /tmp/p/normalized/song.wav", text)
+
+    def test_no_chords_stage_renders_no_section(self):
+        text = brief.render(result_with(structure=FULL_STRUCTURE))
+        self.assertNotIn("## Chords as played", text)
 
 
 class QuestionTests(unittest.TestCase):

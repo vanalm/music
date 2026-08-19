@@ -281,8 +281,39 @@ def build(result, *, audio_path=None, chords=None):
         stems_html = '<h2>Stems</h2><ul class="stems">{}</ul>'.format(items)
 
     # -- chords -----------------------------------------------------------
+    if chords is None:
+        chords = (stages.get("chords") or {}).get("chords")
     chords_html = ""
     if chords:
+        prog_html = ""
+        rows = []
+        norm_file = (stages.get("normalize") or {}).get("file")
+        for label, start, symbols in brief_mod.progression_by_section(
+            chords, sections
+        ):
+            span = next(
+                (s for s in sections if s["label"] == label
+                 and float(s["start"]) == start), None,
+            )
+            lick = ""
+            if norm_file and span:
+                lick = (
+                    '<code class="lick">music-stack lick --input {} '
+                    "--start {} --end {}</code>".format(
+                        _esc(norm_file),
+                        _clock(span["start"]), _clock(span["end"]),
+                    )
+                )
+            rows.append(
+                "<li><b>{}</b> ({}) — {} {}</li>".format(
+                    _esc(label or "all"), _clock(start),
+                    _esc(" · ".join(symbols)), lick,
+                )
+            )
+        if rows:
+            prog_html = (
+                '<ul class="progression">{}</ul>'.format("".join(rows))
+            )
         seen, cards = set(), []
         for c in chords:
             shorthand = c.get("shorthand")
@@ -298,12 +329,10 @@ def build(result, *, audio_path=None, chords=None):
                     short=_esc(shorthand),
                 )
             )
-        if cards:
+        if cards or prog_html:
             chords_html = (
-                "<h2>Chords</h2><div class=\"cards\">{}</div>".format(
-                    "".join(cards)
-                )
-            )
+                "<h2>Chords</h2>{prog}<div class=\"cards\">{cards}</div>"
+            ).format(prog=prog_html, cards="".join(cards))
 
     # -- questions --------------------------------------------------------
     questions_html = "".join(
@@ -402,6 +431,10 @@ _TEMPLATE = """<!DOCTYPE html>
   .stems {{ columns: 2; padding-left: 1.2rem; }}
   .stems a {{ color: var(--accent); }}
   .cards {{ display: flex; flex-wrap: wrap; gap: 1rem; }}
+  .progression {{ list-style: none; padding: 0; }}
+  .progression li {{ margin: .35rem 0; }}
+  .progression .lick {{ display: block; margin: .15rem 0 0 1rem;
+    font-size: .78rem; opacity: .75; }}
   .card {{
     margin: 0; padding: .6rem .4rem .4rem; background: var(--panel);
     border-radius: 10px; text-align: center;

@@ -115,10 +115,45 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
             stage["text"] = local_tools.read_transcript(stage.get("files", []))
         result["stages"]["lyrics"] = stage
 
+    # -- 6. chords: what to actually play ---------------------------------
+    # The playing payoff, not just the writing one: transcribe the
+    # instruments and name the chords, so the song can be learned back.
+    # Prefer the "other" stem when demucs made one — that is where the
+    # guitar lives once vocals, bass, and drums are stripped away.
+    if "chords" in skip or not local_tools.TOOLS["basic-pitch"].which():
+        result["skipped"].append("chords")
+        log("skipping chords (basic-pitch not installed)")
+    else:
+        instrumental = None
+        for path in (result["stages"].get("stems") or {}).get("files", []):
+            if Path(path).stem == "other":
+                instrumental = path
+                break
+        source = instrumental or working
+        log(
+            "transcribing chords from {}…".format(
+                "instrumental stem" if instrumental else "full mix"
+            )
+        )
+        try:
+            stage = local_tools.notes(
+                source, project_dir / "notes" / "chords", dry_run=dry_run
+            )
+        except Exception as exc:
+            # A failed transcription costs one section, never the brief.
+            result["skipped"].append("chords")
+            log("chord transcription failed, continuing: {}".format(exc))
+        else:
+            stage["transcribed"] = str(source)
+            stage["from_instrumental_stem"] = bool(instrumental)
+            if not dry_run:
+                stage["chords"] = detect_chords(stage.get("note_events"))
+            result["stages"]["chords"] = stage
+
     if dry_run:
         return result
 
-    # -- 6. the brief -----------------------------------------------------
+    # -- 7. the brief -----------------------------------------------------
     result["brief"] = render(result)
     brief_path = project_dir / "brief.md"
     brief_path.write_text(result["brief"], encoding="utf-8")
@@ -148,6 +183,65 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
         },
     )
     return result
+
+
+def detect_chords(note_events_path, *, min_duration=0.09, min_notes=3):
+    """Name the chords in a basic-pitch note_events file, with fingerings.
+
+    ``min_notes=3`` because on a whole song two-note groupings are mostly
+    transcription bleed; real strummed chords bring at least a triad.
+    """
+    from . import chords as chords_mod, notes as notes_mod
+
+    if not note_events_path:
+        return []
+    events = notes_mod.read_note_events(note_events_path)
+    events = notes_mod.filter_events(events, min_duration=min_duration)
+    out = []
+    for item in chords_mod.analyze(events, min_notes=min_notes):
+        chord = item.get("chord")
+        if not chord or not chord.get("symbol"):
+            continue
+        entry = {
+            "start": round(float(item["start"]), 2),
+            "end": round(float(item["end"]), 2),
+            "symbol": chord["symbol"],
+        }
+        voicing = item.get("voicing")
+        if voicing:
+            entry["positions"] = voicing
+            entry["shorthand"] = chords_mod.shorthand(voicing)
+        out.append(entry)
+    return out
+
+
+def progression_by_section(chords, sections):
+    """Group named chords under the structure's sections, deduped in place.
+
+    Returns ``[(label, start_seconds, [symbols…])…]``. Without *sections*
+    everything lands under one ``None`` label. Consecutive repeats collapse:
+    a bar of strumming is one chord, not sixteen.
+    """
+    if not chords:
+        return []
+    spans = [
+        (s["label"], float(s["start"]), float(s["end"]))
+        for s in (sections or [])
+    ] or [(None, 0.0, float("inf"))]
+
+    grouped = []
+    for label, start, end in spans:
+        symbols = []
+        for c in chords:
+            when = c.get("start")
+            if when is None:
+                continue  # lick-style entries carry no timeline position
+            if start <= float(when) < end and c.get("symbol"):
+                if not symbols or symbols[-1] != c["symbol"]:
+                    symbols.append(c["symbol"])
+        if symbols:
+            grouped.append((label, start, symbols))
+    return grouped
 
 
 def render(result):
@@ -191,6 +285,59 @@ def render(result):
             lines += [
                 "",
                 "**Not present yet:** {}".format(", ".join(missing)),
+            ]
+        lines.append("")
+
+    chords_stage = result["stages"].get("chords", {})
+    detected = chords_stage.get("chords") or []
+    if detected:
+        lines += ["## Chords as played", ""]
+        if chords_stage.get("from_instrumental_stem"):
+            lines.append("*Transcribed from the instrumental stem.*")
+        else:
+            lines.append(
+                "*Transcribed from the full mix — the vocal can smear "
+                "voicings; trust your ears over the exact extensions.*"
+            )
+        lines.append("")
+        sections = (structure or {}).get("sections") if structure else None
+        for label, start, symbols in progression_by_section(detected, sections):
+            if label:
+                lines.append(
+                    "- **{}** ({}) — {}".format(
+                        label, _clock(start), " · ".join(symbols)
+                    )
+                )
+            else:
+                lines.append("- {}".format(" · ".join(symbols)))
+        shapes = {
+            c["shorthand"]: c["symbol"]
+            for c in detected
+            if c.get("shorthand")
+        }
+        if shapes:
+            lines += [
+                "",
+                "Shapes: "
+                + "  ".join(
+                    "{} `{}`".format(sym, short)
+                    for short, sym in sorted(
+                        shapes.items(), key=lambda kv: kv[1]
+                    )
+                ),
+            ]
+        norm_file = result["stages"].get("normalize", {}).get("file")
+        if norm_file:
+            lines += [
+                "",
+                "To work out any phrase note-for-note (tab, scale, sheet "
+                "music), trim tightly:",
+                "",
+                "```",
+                "music-stack lick --input {} --start 0:24 --end 0:31".format(
+                    norm_file
+                ),
+                "```",
             ]
         lines.append("")
 

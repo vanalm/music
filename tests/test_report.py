@@ -157,6 +157,37 @@ class PreviewEmbedTests(unittest.TestCase):
         self.assertNotIn("not embedded", html)
 
 
+class ChordsFromResultTests(unittest.TestCase):
+    """The report shows what to play without anyone passing chords= by hand."""
+
+    CHORDS = [
+        {"start": 7.0, "end": 7.8, "symbol": "C", "shorthand": "x32010",
+         "positions": [{"string": 5, "fret": 3}, {"string": 4, "fret": 2},
+                       {"string": 2, "fret": 1}]},
+        {"start": 32.0, "end": 32.9, "symbol": "G", "shorthand": "320003",
+         "positions": [{"string": 6, "fret": 3}, {"string": 5, "fret": 2},
+                       {"string": 1, "fret": 3}]},
+    ]
+
+    def test_progression_and_boxes_render_from_the_stages_dict(self):
+        data = payload()
+        data["stages"]["chords"] = {"chords": self.CHORDS}
+        data["stages"]["normalize"]["file"] = "/tmp/p/normalized/song.wav"
+        html = report.build(data)
+        self.assertIn('class="progression"', html)
+        self.assertIn("verse", html)
+        self.assertIn("x32010", html)          # chord box card
+        self.assertIn("music-stack lick --input", html)
+
+    def test_explicit_chords_param_still_wins(self):
+        html = report.build(payload(), chords=self.CHORDS)
+        self.assertIn("x32010", html)
+
+    def test_no_chords_no_section(self):
+        html = report.build(payload())
+        self.assertNotIn('class="progression"', html)
+
+
 class EscapingTests(unittest.TestCase):
     def test_title_cannot_inject_markup(self):
         html = report.build({"title": "<script>alert(1)</script>", "stages": {}})
