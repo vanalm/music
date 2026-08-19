@@ -1352,6 +1352,9 @@ _TEMPLATE = """<!DOCTYPE html>
 
   .karaoke {{ margin-top: .55rem; text-align: center; font-size: .95rem;
     font-weight: 600; min-height: 1.35rem; }}
+  .speedbar {{ display: flex; align-items: center; gap: .3rem;
+    margin-top: .55rem; flex-wrap: wrap; }}
+  .speedbar .note {{ margin-left: .3rem; }}
   .words {{ position: relative; height: 1.35rem; margin-top: .1rem; }}
   .word {{ position: absolute; top: 0; font-size: .66rem;
     color: var(--muted); white-space: nowrap; max-width: 42%;
@@ -1468,7 +1471,9 @@ separation) · allin1 + madmom (tempo &amp; sections) · mlx-whisper
 (lyrics) · basic-pitch (note transcription). The page itself is
 dependency-free HTML/SVG with the audio embedded — mail it to anyone.</p>
 <p><b>Using it</b> — <kbd>space</kbd> play/pause · <kbd>←</kbd>
-<kbd>→</kbd> scrub · click the timeline, a chord chip, a note name, or
+<kbd>→</kbd> scrub · the speed pills (or <kbd>[</kbd> <kbd>]</kbd>) slow
+the song down without changing pitch — the browser time-stretches, and
+every chart, lyric, and loop stays in sync · click the timeline, a chord chip, a note name, or
 anywhere in a roll or staff to jump there · the toggle switches every
 section between Piano roll, Guitar tab, Sheet music, and Chord chart ·
 a plain click moves the playhead without starting playback ·
@@ -1492,8 +1497,16 @@ neck.</p>
 {timeline}
 <div class="karaoke" id="karaoke" hidden></div>
 {viewbar}
+<div class="speedbar"><span class="poslabel">speed</span>
+<button type="button" class="postab" data-rate="0.5">0.5×</button>
+<button type="button" class="postab" data-rate="0.65">0.65×</button>
+<button type="button" class="postab" data-rate="0.75">0.75×</button>
+<button type="button" class="postab" data-rate="0.85">0.85×</button>
+<button type="button" class="postab active" data-rate="1">1×</button>
+<span class="note">same pitch, slower song</span></div>
 <div class="keys"><kbd>space</kbd> play / pause &nbsp; <kbd>←</kbd>
-<kbd>→</kbd> scrub 1s &nbsp; click moves the playhead &nbsp;
+<kbd>→</kbd> scrub 1s &nbsp; <kbd>[</kbd> <kbd>]</kbd> slower / faster
+(pitch stays put) &nbsp; click moves the playhead &nbsp;
 <kbd>⌥</kbd>-click a note (or a moment) to hear it, ⌥-drag to play
 through, hold <kbd>⌥</kbd> for each section's ▶ tones button &nbsp;
 <kbd>⌘</kbd>-click two spots to loop a passage, <kbd>esc</kbd> clears
@@ -1628,6 +1641,38 @@ through, hold <kbd>⌥</kbd> for each section's ▶ tones button &nbsp;
       }});
     }}
 
+    // -- speed: time-stretch without pitch shift -------------------------
+    // The browser's own stretcher (playbackRate + preservesPitch) slows
+    // the song while every playhead and highlight follows currentTime.
+    var RATES = [0.5, 0.65, 0.75, 0.85, 1];
+    var speedBtns = document.querySelectorAll(".speedbar [data-rate]");
+    function setSpeed(rate) {{
+      player.playbackRate = rate;
+      player.preservesPitch = true;
+      player.webkitPreservesPitch = true;
+      speedBtns.forEach(function (b) {{
+        b.classList.toggle(
+          "active", parseFloat(b.dataset.rate) === rate
+        );
+      }});
+    }}
+    speedBtns.forEach(function (btn) {{
+      btn.addEventListener("click", function () {{
+        setSpeed(parseFloat(btn.dataset.rate));
+      }});
+    }});
+    function nudgeSpeed(step) {{
+      var current = player.playbackRate || 1;
+      var idx = 0;
+      for (var i = 0; i < RATES.length; i++) {{
+        if (Math.abs(RATES[i] - current) <
+            Math.abs(RATES[idx] - current)) idx = i;
+      }}
+      idx = Math.max(0, Math.min(RATES.length - 1, idx + step));
+      setSpeed(RATES[idx]);
+    }}
+    setSpeed(1);
+
     // -- tones playback: the transcription rendered as synth, at tempo --
     var tones = {{nodes: [], btn: null, timer: null}};
     var compressor = null;
@@ -1678,11 +1723,13 @@ through, hold <kbd>⌥</kbd> for each section's ▶ tones button &nbsp;
       stopTones();
       var first = Infinity;
       notes.forEach(function (n) {{ first = Math.min(first, n.start); }});
+      // The synth rendition follows the practice speed too.
+      var rate = player.playbackRate || 1;
       var base = audioCtx.currentTime + 0.08;
       var last = 0;
       notes.forEach(function (n) {{
-        var at = base + (n.start - first);
-        var dur = Math.max(n.dur, 0.08);
+        var at = base + (n.start - first) / rate;
+        var dur = Math.max(n.dur, 0.08) / rate;
         var osc = audioCtx.createOscillator();
         var filter = audioCtx.createBiquadFilter();
         var gain = audioCtx.createGain();
@@ -1700,7 +1747,7 @@ through, hold <kbd>⌥</kbd> for each section's ▶ tones button &nbsp;
         osc.start(at);
         osc.stop(at + dur + 0.25);
         tones.nodes.push({{osc: osc, gain: gain}});
-        last = Math.max(last, n.start - first + dur);
+        last = Math.max(last, (n.start - first) / rate + dur);
       }});
       tones.btn = btn;
       btn.textContent = "■ stop";
@@ -2158,6 +2205,12 @@ through, hold <kbd>⌥</kbd> for each section's ▶ tones button &nbsp;
         var back = Math.max(0, player.currentTime - 1);
         if (loop.b !== null && back < loop.a) back = loop.a;
         player.currentTime = back;
+      }} else if (e.code === "BracketLeft") {{
+        e.preventDefault();
+        nudgeSpeed(-1);
+      }} else if (e.code === "BracketRight") {{
+        e.preventDefault();
+        nudgeSpeed(1);
       }}
     }});
   }})();

@@ -271,6 +271,14 @@ class ChordSvgTests(unittest.TestCase):
         self.assertIn("e.altKey", html)
         self.assertIn("only moves the playhead", html)
 
+    def test_speed_control_preserves_pitch(self):
+        html = report.build(payload())
+        self.assertIn('class="speedbar"', html)
+        self.assertIn('data-rate="0.5"', html)
+        self.assertIn("preservesPitch", html)
+        self.assertIn('e.code === "BracketLeft"', html)
+        self.assertIn("same pitch, slower song", html)
+
     def test_tones_playback_is_wired(self):
         data = payload()
         data["stages"]["chords"] = {

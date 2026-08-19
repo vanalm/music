@@ -29,7 +29,8 @@ names aligned beneath), guitar tab (alternate fingerings by neck position), gran
 sheet music with time signature, bar lines, and beamed rhythms from
 allin1's beat grid, and chord chart; lyrics ride every chart;
 a playhead runs through every view and follows into the next section;
-time-synced lyrics (karaoke line + clickable lines); keyboard transport
+time-synced lyrics (karaoke line + clickable lines); keyboard transport,
+speed pills that slow playback without changing pitch ([ and ] nudge),
 and ⌘-click A/B looping for practice; plain clicks move the playhead without
 autoplay; ⌥-click sounds a note (or the whole moment when the
 click misses one), ⌥-drag sweeps through the notes with held, cross-
@@ -159,9 +160,9 @@ explicitly asks.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-297 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
+298 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 305.
+runs 306.
 
 `tests/fakes.py` fakes **only the socket** — it reuses the real host allow-list
 check and the real poll loop, so adapter tests exercise the genuine security
