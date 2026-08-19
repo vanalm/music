@@ -81,7 +81,8 @@ music** (grand staff with time signature, bar lines, and beamed
 rhythms read off allin1's beat grid), and the **chord chart** with textbook grips. A
 playhead runs through whichever view is up and flows section to section;
 lyrics are time-synced (karaoke line in the player, clickable lines below);
-space bar and arrow keys drive playback; everything clickable seeks. One
+space bar and arrow keys drive playback; everything clickable seeks;
+⌘-click two spots to loop a passage (esc clears). One
 self-contained file — audio embedded — so you can mail it to a bandmate.
 Regenerate any time with `music-stack report <slug>`.
 
@@ -229,9 +230,9 @@ disk.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-291 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
+292 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 299.
+runs 300.
 
 The hosted-service tests are fully mocked — they verify this code's logic, not
 vendor behaviour. **No live API call has ever been made from this repository.**

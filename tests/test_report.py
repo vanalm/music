@@ -244,6 +244,18 @@ class ChordSvgTests(unittest.TestCase):
         self.assertIn('e.code === "ArrowRight"', html)
         self.assertIn('e.code === "ArrowLeft"', html)
 
+    def test_ab_loop_is_wired(self):
+        html = report.build(payload())
+        # cmd-click sets the points, escape clears, the region is shaded,
+        # playback and scrubbing wrap at the loop end.
+        self.assertIn("e.metaKey", html)
+        self.assertIn('e.code === "Escape"', html)
+        self.assertIn("loop-shade", html)
+        self.assertIn('id="loopbadge"', html)
+        self.assertIn("loop.b !== null && player.currentTime >= loop.b",
+                      html)
+        self.assertIn("⌘", html)
+
     def test_wide_voicing_draws_instead_of_crashing(self):
         # A detected (not textbook) shape can span more than five frets.
         positions = [{"string": 6, "fret": 12}, {"string": 5, "fret": 0},

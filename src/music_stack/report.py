@@ -1186,6 +1186,14 @@ _TEMPLATE = """<!DOCTYPE html>
     position: absolute; top: 0; bottom: 0; left: 0; width: 1.5px;
     background: var(--accent); display: none; pointer-events: none;
   }}
+  .loop-shade {{
+    position: absolute; top: 0; bottom: 0; pointer-events: none;
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    border-left: 2px solid var(--accent);
+    border-right: 2px solid var(--accent); z-index: 1;
+  }}
+  .loopbadge {{ margin-left: .6rem; color: var(--accent);
+    font-weight: 650; }}
 
   .tophead {{ display: flex; align-items: center; gap: 1rem;
     justify-content: space-between; }}
@@ -1371,8 +1379,9 @@ neck.</p>
 <div class="karaoke" id="karaoke" hidden></div>
 {viewbar}
 <div class="keys"><kbd>space</kbd> play / pause &nbsp; <kbd>←</kbd>
-<kbd>→</kbd> scrub 1s &nbsp; click a section, chord, note, or lyric to
-jump there</div>
+<kbd>→</kbd> scrub 1s &nbsp; click anything to jump there &nbsp;
+<kbd>⌘</kbd>-click two spots to loop a passage, <kbd>esc</kbd> clears
+<span class="loopbadge" id="loopbadge" hidden></span></div>
 </div>
 <div class="arrangement">{arrangement}</div>
 {missing}
@@ -1427,13 +1436,110 @@ jump there</div>
       }}
     );
     if (!player) return;
+
+    // -- A/B loop: cmd-click two spots, escape clears -------------------
+    var loop = {{a: null, b: null}};
+    function clockfmt(t) {{
+      t = Math.max(0, Math.floor(t));
+      return Math.floor(t / 60) + ":" + ("0" + (t % 60)).slice(-2);
+    }}
+    function seqPos(w, t) {{
+      var idx = 0;
+      for (var i = 0; i < w.times.length; i++) {{
+        if (w.times[i] <= t) idx = i; else break;
+      }}
+      var frac = 0;
+      if (idx + 1 < w.times.length && w.times[idx + 1] > w.times[idx]) {{
+        frac = (t - w.times[idx]) / (w.times[idx + 1] - w.times[idx]);
+        frac = Math.max(0, Math.min(1, frac));
+      }}
+      if (w.xs && w.xs.length === w.times.length) {{
+        var x = w.xs[idx];
+        if (idx + 1 < w.xs.length) x += frac * (w.xs[idx + 1] - w.xs[idx]);
+        return {{v: x, unit: "px"}};
+      }}
+      var col = idx + (idx + 1 < w.times.length ? frac : 0);
+      return {{v: w.lead + col * w.colw + w.colw / 2, unit: "ch"}};
+    }}
+    function addShade(parent, left, width, unit) {{
+      var el = document.createElement("div");
+      el.className = "loop-shade";
+      el.style.left = left + unit;
+      el.style.width = Math.max(width, 0) + unit;
+      parent.appendChild(el);
+    }}
+    function renderLoop() {{
+      document.querySelectorAll(".loop-shade").forEach(function (el) {{
+        el.remove();
+      }});
+      var badge = document.getElementById("loopbadge");
+      if (badge) {{
+        badge.hidden = loop.a === null;
+        if (loop.b !== null) {{
+          badge.textContent = "looping " + clockfmt(loop.a) + "–" +
+            clockfmt(loop.b);
+        }} else if (loop.a !== null) {{
+          badge.textContent = "loop start " + clockfmt(loop.a) +
+            " — ⌘-click the end";
+        }}
+      }}
+      if (loop.a === null) return;
+      var b = loop.b === null ? loop.a : loop.b;
+      if (timeline && player.duration) {{
+        addShade(timeline, 100 * loop.a / player.duration,
+                 100 * (b - loop.a) / player.duration, "%");
+      }}
+      rolls.forEach(function (wrap) {{
+        var t0 = parseFloat(wrap.dataset.start);
+        var t1 = parseFloat(wrap.dataset.end);
+        if (b < t0 || loop.a >= t1) return;
+        var a1 = Math.max(loop.a, t0), b1 = Math.min(b, t1);
+        addShade(wrap, 100 * (a1 - t0) / (t1 - t0),
+                 100 * (b1 - a1) / (t1 - t0), "%");
+      }});
+      tabwraps.forEach(function (w) {{
+        if (b < w.t0 || loop.a >= w.t1 || !w.times.length) return;
+        var inner = w.el.querySelector(".tabinner");
+        if (!inner) return;
+        var p0 = seqPos(w, Math.max(loop.a, w.t0));
+        var p1 = seqPos(w, Math.min(b, w.t1));
+        addShade(inner, p0.v, p1.v - p0.v, p0.unit);
+      }});
+    }}
+    function setLoopPoint(t) {{
+      if (loop.a === null || loop.b !== null) {{
+        loop.a = t;
+        loop.b = null;
+      }} else {{
+        loop.b = t;
+        if (loop.b < loop.a) {{
+          var swap = loop.a;
+          loop.a = loop.b;
+          loop.b = swap;
+        }}
+      }}
+      renderLoop();
+    }}
+    function clearLoop() {{
+      loop.a = loop.b = null;
+      renderLoop();
+    }}
+    function seekOrLoop(e, t) {{
+      if (e.metaKey || e.ctrlKey) {{
+        e.preventDefault();
+        setLoopPoint(t);
+        return;
+      }}
+      player.currentTime = t;
+      player.play();
+    }}
+
     document.querySelectorAll(
       ".seg[data-start], .chip[data-start], .ncol[data-start], " +
       ".word[data-start], .lline[data-start]"
     ).forEach(function (el) {{
-      el.addEventListener("click", function () {{
-        player.currentTime = parseFloat(el.dataset.start);
-        player.play();
+      el.addEventListener("click", function (e) {{
+        seekOrLoop(e, parseFloat(el.dataset.start));
       }});
     }});
     var timed = document.querySelectorAll(
@@ -1498,8 +1604,7 @@ jump there</div>
           );
           best = Math.max(0, Math.min(entry.times.length - 1, best));
         }}
-        player.currentTime = entry.times[best];
-        player.play();
+        seekOrLoop(e, entry.times[best]);
       }});
     }});
     var rolls = document.querySelectorAll(".rollwrap[data-start]");
@@ -1509,11 +1614,14 @@ jump there</div>
         var frac = (e.clientX - rect.left) / rect.width;
         var t0 = parseFloat(wrap.dataset.start);
         var t1 = parseFloat(wrap.dataset.end);
-        player.currentTime = t0 + frac * (t1 - t0);
-        player.play();
+        seekOrLoop(e, t0 + frac * (t1 - t0));
       }});
     }});
     player.addEventListener("timeupdate", function () {{
+      // Inside a loop region, wrap back to the start at the boundary.
+      if (loop.b !== null && player.currentTime >= loop.b) {{
+        player.currentTime = loop.a;
+      }}
       if (playhead && timeline && player.duration) {{
         playhead.style.left =
           (100 * player.currentTime / player.duration) + "%";
@@ -1570,36 +1678,16 @@ jump there</div>
       }});
       tabwraps.forEach(function (w) {{
         if (!w.line) return;
-        if (t < w.t0 || t >= w.t1 || !w.times.length) {{
+        if (t < w.t0 || t >= w.t1 || !w.times.length ||
+            t < w.times[0]) {{
           w.line.style.display = "none";
           return;
         }}
-        var idx = -1;
-        for (var i = 0; i < w.times.length; i++) {{
-          if (w.times[i] <= t) idx = i; else break;
-        }}
-        if (idx < 0) {{ w.line.style.display = "none"; return; }}
-        // Glide between this column and the next in proportion to time,
-        // so the line moves smoothly yet is exactly on each notehead at
-        // its onset.
-        var frac = 0;
-        if (idx + 1 < w.times.length &&
-            w.times[idx + 1] > w.times[idx]) {{
-          frac = (t - w.times[idx]) / (w.times[idx + 1] - w.times[idx]);
-          frac = Math.max(0, Math.min(1, frac));
-        }}
+        // seqPos glides between this column and the next in proportion
+        // to time: smooth motion, exactly on each notehead at its onset.
+        var pos = seqPos(w, t);
         w.line.style.display = "block";
-        if (w.xs && w.xs.length === w.times.length) {{
-          var x = w.xs[idx];
-          if (idx + 1 < w.xs.length) {{
-            x += frac * (w.xs[idx + 1] - w.xs[idx]);
-          }}
-          w.line.style.left = x + "px";
-        }} else {{
-          var col = idx + (idx + 1 < w.times.length ? frac : 0);
-          w.line.style.left =
-            (w.lead + col * w.colw + w.colw / 2) + "ch";
-        }}
+        w.line.style.left = pos.v + pos.unit;
         w.el.scrollLeft = w.line.offsetLeft - w.el.clientWidth / 2;
       }});
     }});
@@ -1614,19 +1702,28 @@ jump there</div>
       }});
     }});
     document.addEventListener("keydown", function (e) {{
+      if (e.code === "Escape") {{
+        clearLoop();
+        return;
+      }}
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.code === "Space") {{
         e.preventDefault();
         if (player.paused) player.play(); else player.pause();
       }} else if (e.code === "ArrowRight") {{
         e.preventDefault();
-        player.currentTime = Math.min(
+        var fwd = Math.min(
           player.duration || player.currentTime + 1,
           player.currentTime + 1
         );
+        // Scrubbing respects an active loop: wrap at its end.
+        if (loop.b !== null && fwd >= loop.b) fwd = loop.a;
+        player.currentTime = fwd;
       }} else if (e.code === "ArrowLeft") {{
         e.preventDefault();
-        player.currentTime = Math.max(0, player.currentTime - 1);
+        var back = Math.max(0, player.currentTime - 1);
+        if (loop.b !== null && back < loop.a) back = loop.a;
+        player.currentTime = back;
       }}
     }});
   }})();
