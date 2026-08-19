@@ -213,10 +213,12 @@ def note_roll(events, start, end, *, width=1000, row=8):
         if velocity is not None:
             opacity = 0.35 + 0.65 * max(0.0, min(float(velocity) / 127.0, 1.0))
         parts.append(
-            '<rect class="nr" data-midi="{m}" x="{x:.1f}" y="{y}" '
-            'width="{w:.1f}" height="{h}" rx="2" opacity="{o:.2f}">'
+            '<rect class="nr" data-midi="{m}" data-start="{s}" '
+            'x="{x:.1f}" y="{y}" width="{w:.1f}" height="{h}" rx="2" '
+            'opacity="{o:.2f}">'
             "<title>{name} · {t}s</title></rect>".format(
-                m=n["midi"], x=x, y=y + 1, w=w, h=row - 2, o=opacity,
+                m=n["midi"], s=round(float(n["start"]), 2),
+                x=x, y=y + 1, w=w, h=row - 2, o=opacity,
                 name=_esc(note_name(n["midi"])),
                 t=round(float(n["start"]), 1),
             )
@@ -368,10 +370,11 @@ def staff_svg(events, start, end, *, col_step=26, gutter=48, beats=None,
 
     Notes that sound together share one column, and columns advance by a
     fixed step the way engraved notation reads — not by wall-clock time.
-    Returns ``(svg, times, xs)``: each column's onset and its exact x in
-    the SVG's pixel space, so the page script can put the playhead
-    precisely on the notehead sounding now (the SVG renders 1:1, inside a
-    horizontal scroller). Returns ``None`` with no notes in the window.
+    Returns ``(svg, times, xs, mids)``: each column's onset, its exact x
+    in the SVG's pixel space (so the page script can put the playhead
+    precisely on the notehead sounding now — the SVG renders 1:1 inside a
+    horizontal scroller), and its MIDI notes (so an alt-click can sound
+    the whole moment). Returns ``None`` with no notes in the window.
 
     Low notes sit on the bass staff instead of dangling from the treble on
     a tower of ledger lines; middle C takes the conventional single ledger
@@ -639,7 +642,10 @@ def staff_svg(events, start, end, *, col_step=26, gutter=48, beats=None,
                     )
 
     parts.append("</svg>")
-    return "".join(parts), times_list, xs
+    return (
+        "".join(parts), times_list, xs,
+        [list(c["midis"]) for c in cols],
+    )
 
 
 # -- page ------------------------------------------------------------------
@@ -905,10 +911,11 @@ def build(result, *, audio_path=None, chords=None):
             )
             staff_view = '<p class="note">No notes transcribed here.</p>'
             if built:
-                st_svg, st_times, st_xs = built
+                st_svg, st_times, st_xs, st_mids = built
                 staff_view = (
                     '<div class="tabwrap staffwrap" data-start="{t0}" '
-                    'data-end="{t1}" data-times="{times}" data-xs="{xs}">'
+                    'data-end="{t1}" data-times="{times}" data-xs="{xs}" '
+                    'data-mids="{mids}">'
                     '<div class="tabinner">{staff}{words}'
                     '<div class="roll-line tab-line"></div></div>'
                     "</div>".format(
@@ -917,6 +924,10 @@ def build(result, *, audio_path=None, chords=None):
                             str(round(t, 2)) for t in st_times
                         ),
                         xs=",".join(str(round(x, 1)) for x in st_xs),
+                        mids=";".join(
+                            ",".join(str(m) for m in col)
+                            for col in st_mids
+                        ),
                         staff=st_svg,
                         words=_words_row(
                             lyr_segments, s_start, s_end,
@@ -1387,8 +1398,10 @@ dependency-free HTML/SVG with the audio embedded — mail it to anyone.</p>
 <kbd>→</kbd> scrub · click the timeline, a chord chip, a note name, or
 anywhere in a roll or staff to jump there · the toggle switches every
 section between Piano roll, Guitar tab, Sheet music, and Chord chart ·
-click any notehead, roll bar, or fret number to hear that pitch ring
-(chord columns strum the grip) ·
+a plain click moves the playhead without starting playback ·
+<kbd>⌥</kbd>-click a notehead to hear that pitch ring, or ⌥-click beside
+the notes to hear everything sounding at that moment (chord columns
+strum the grip) ·
 each section's <code>music-stack lick</code> command re-transcribes just
 that span for note-perfect tab, scale, and sheet music.</p>
 <p><b>Accuracy</b> — transcription is machine listening on a full mix:
@@ -1404,7 +1417,8 @@ neck.</p>
 <div class="karaoke" id="karaoke" hidden></div>
 {viewbar}
 <div class="keys"><kbd>space</kbd> play / pause &nbsp; <kbd>←</kbd>
-<kbd>→</kbd> scrub 1s &nbsp; click anything to jump there &nbsp;
+<kbd>→</kbd> scrub 1s &nbsp; click moves the playhead &nbsp;
+<kbd>⌥</kbd>-click a note (or a moment) to hear it &nbsp;
 <kbd>⌘</kbd>-click two spots to loop a passage, <kbd>esc</kbd> clears
 <span class="loopbadge" id="loopbadge" hidden></span></div>
 </div>
@@ -1491,15 +1505,17 @@ neck.</p>
         osc.stop(at + 1.6);
       }});
     }}
-    // Capture-phase so a notehead click previews instead of seeking;
-    // cmd-clicks fall through to the loop logic.
+    // Capture-phase: with alt held, a click on a notehead sounds exactly
+    // that note. Alt-clicks that miss a note fall through to the chart
+    // handlers, which sound the whole moment instead.
     document.addEventListener("click", function (e) {{
-      if (e.metaKey || e.ctrlKey) return;
+      if (!e.altKey || e.metaKey || e.ctrlKey) return;
       var target = e.target;
       var el = target && target.closest
         ? target.closest(".nr[data-midi], .sn[data-midi]") : null;
       if (!el) return;
       e.stopPropagation();
+      e.preventDefault();
       previewTone([parseInt(el.dataset.midi, 10)]);
     }}, true);
 
@@ -1596,8 +1612,9 @@ neck.</p>
         setLoopPoint(t);
         return;
       }}
+      // A plain click only moves the playhead; play stays where it was
+      // (space starts it, and an already-playing song keeps playing).
       player.currentTime = t;
-      player.play();
     }}
 
     document.querySelectorAll(
@@ -1632,17 +1649,19 @@ neck.</p>
         xs: w.dataset.xs
           ? w.dataset.xs.split(",").map(parseFloat).filter(isFinite)
           : null,
-        cells: w.dataset.cells
+        // Per-column MIDI notes, from either encoding: "s:m" fret cells
+        // (tab, chord chart) or bare midi lists (staff).
+        mids: w.dataset.cells
           ? w.dataset.cells.split(";").map(function (col) {{
-              var notes = {{}};
-              col.split(",").forEach(function (pair) {{
-                var sm = pair.split(":");
-                if (sm.length === 2) notes[parseInt(sm[0], 10)] =
-                  parseInt(sm[1], 10);
-              }});
-              return notes;
+              return col.split(",").map(function (pair) {{
+                return parseInt(pair.split(":").pop(), 10);
+              }}).filter(isFinite);
             }})
-          : null,
+          : (w.dataset.mids
+            ? w.dataset.mids.split(";").map(function (col) {{
+                return col.split(",").map(Number).filter(isFinite);
+              }})
+            : null),
         line: w.querySelector(".tab-line"),
         t0: parseFloat(w.dataset.start),
         t1: parseFloat(w.dataset.end),
@@ -1681,30 +1700,12 @@ neck.</p>
             (xch - entry.lead - entry.colw / 2) / entry.colw
           );
           best = Math.max(0, Math.min(entry.times.length - 1, best));
-          // A click on a fret digit sounds that note (a chord column
-          // strums the grip) instead of seeking.
-          if (entry.cells && !(e.metaKey || e.ctrlKey)) {{
-            var lineH = parseFloat(style.lineHeight) || 14;
-            var padTop = parseFloat(style.paddingTop) || 0;
-            var row = Math.floor(
-              (e.clientY - rect.top - padTop) / lineH
-            );
-            var center = entry.lead + best * entry.colw +
-              entry.colw / 2;
-            var notes = entry.cells[best] || {{}};
-            var onDigit = row >= 0 && row < 6 &&
-              Math.abs(xch - center) <= entry.colw / 2 &&
-              notes[row + 1] !== undefined;
-            if (onDigit) {{
-              var midis = Object.keys(notes).map(function (s) {{
-                return notes[s];
-              }});
-              previewTone(
-                midis.length > 1 ? midis : [notes[row + 1]]
-              );
-              return;
-            }}
-          }}
+        }}
+        if (e.altKey && !(e.metaKey || e.ctrlKey)) {{
+          // Alt-click: sound the whole column at that moment.
+          var midis = entry.mids && entry.mids[best];
+          if (midis && midis.length) previewTone(midis);
+          return;
         }}
         seekOrLoop(e, entry.times[best]);
       }});
@@ -1716,7 +1717,28 @@ neck.</p>
         var frac = (e.clientX - rect.left) / rect.width;
         var t0 = parseFloat(wrap.dataset.start);
         var t1 = parseFloat(wrap.dataset.end);
-        seekOrLoop(e, t0 + frac * (t1 - t0));
+        var t = t0 + frac * (t1 - t0);
+        if (e.altKey) {{
+          // Alt-click that missed a note: sound the whole moment — every
+          // note in the nearest vertical slice.
+          var nearest = null;
+          wrap.querySelectorAll(".nr[data-start]").forEach(function (n) {{
+            var d = Math.abs(parseFloat(n.dataset.start) - t);
+            if (nearest === null || d < nearest.d) {{
+              nearest = {{d: d, s: parseFloat(n.dataset.start)}};
+            }}
+          }});
+          if (nearest === null) return;
+          var midis = [];
+          wrap.querySelectorAll(".nr[data-start]").forEach(function (n) {{
+            if (Math.abs(parseFloat(n.dataset.start) - nearest.s) <= 0.08) {{
+              midis.push(parseInt(n.dataset.midi, 10));
+            }}
+          }});
+          previewTone(midis);
+          return;
+        }}
+        seekOrLoop(e, t);
       }});
     }});
     player.addEventListener("timeupdate", function () {{

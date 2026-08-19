@@ -82,8 +82,9 @@ rhythms read off allin1's beat grid), and the **chord chart** with textbook grip
 playhead runs through whichever view is up and flows section to section;
 lyrics are time-synced (karaoke line in the player, clickable lines below);
 space bar and arrow keys drive playback; everything clickable seeks;
-⌘-click two spots to loop a passage (esc clears); click any notehead
-or fret number to hear its pitch ring. One
+⌘-click two spots to loop a passage (esc clears); a plain click moves the playhead
+without starting playback; ⌥-click a note to hear it, or ⌥-click beside
+the notes to hear the whole moment. One
 self-contained file — audio embedded — so you can mail it to a bandmate.
 Regenerate any time with `music-stack report <slug>`.
 
@@ -231,9 +232,9 @@ disk.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-294 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
+295 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 302.
+runs 303.
 
 The hosted-service tests are fully mocked — they verify this code's logic, not
 vendor behaviour. **No live API call has ever been made from this repository.**

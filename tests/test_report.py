@@ -244,15 +244,29 @@ class ChordSvgTests(unittest.TestCase):
         self.assertIn('e.code === "ArrowRight"', html)
         self.assertIn('e.code === "ArrowLeft"', html)
 
-    def test_notes_carry_midi_for_click_to_hear(self):
+    def test_notes_carry_midi_and_time_for_alt_click_to_hear(self):
         roll = report.note_roll(
             [{"start": 10.0, "end": 10.4, "midi": 64}], 8.0, 40.0
         )
         self.assertIn('data-midi="64"', roll)
-        svg, _t, _x = report.staff_svg(
-            [{"start": 10.0, "end": 10.4, "midi": 64}], 8.0, 40.0
+        self.assertIn('data-start="10.0"', roll)
+        svg, _t, _x, mids = report.staff_svg(
+            [
+                {"start": 10.0, "end": 10.4, "midi": 64},
+                {"start": 10.03, "end": 10.4, "midi": 60},
+            ],
+            8.0, 40.0,
         )
         self.assertIn('data-midi="64"', svg)
+        # The whole simultaneous moment, for alt-clicks that miss a note.
+        self.assertEqual(sorted(mids[0]), [60, 64])
+        self.assertEqual(len(mids), 1)
+
+    def test_interaction_contract_in_the_script(self):
+        html = report.build(payload())
+        # Alt previews; a plain click moves the playhead without playing.
+        self.assertIn("e.altKey", html)
+        self.assertIn("only moves the playhead", html)
 
     def test_tab_and_chord_cells_carry_string_midi_pairs(self):
         data = payload()
@@ -437,7 +451,7 @@ class NoteRollTests(unittest.TestCase):
             {"start": 11.0, "end": 11.4, "midi": 48},  # C3 -> bass staff
             {"start": 12.0, "end": 12.4, "midi": 36},  # C2 -> ledger below
         ]
-        svg, times, xs = report.staff_svg(events, 8.0, 40.0)
+        svg, times, xs, _mids = report.staff_svg(events, 8.0, 40.0)
         self.assertEqual(svg.count('class="sn"'), 3)
         self.assertIn("♭", svg)
         self.assertIn("\U0001d11e", svg)   # treble clef
@@ -452,7 +466,7 @@ class NoteRollTests(unittest.TestCase):
             {"start": 11.0, "end": 11.4, "midi": 48},
             {"start": 12.0, "end": 12.4, "midi": 36},
         ]
-        svg, times, xs = report.staff_svg(events, 8.0, 40.0)
+        svg, times, xs, _mids = report.staff_svg(events, 8.0, 40.0)
         self.assertEqual(times, [10.0, 11.0, 12.0])
         # Engraving spacing: equal steps regardless of the time gaps.
         self.assertEqual(xs[1] - xs[0], xs[2] - xs[1])
@@ -464,7 +478,7 @@ class NoteRollTests(unittest.TestCase):
             {"start": 10.0, "end": 11.0, "midi": 48},
             {"start": 10.03, "end": 11.0, "midi": 64},
         ]
-        _svg, times, xs = report.staff_svg(events, 8.0, 40.0)
+        _svg, times, xs, _mids = report.staff_svg(events, 8.0, 40.0)
         self.assertEqual(len(times), 1)
         self.assertEqual(len(xs), 1)
 
@@ -484,7 +498,7 @@ class NoteRollTests(unittest.TestCase):
             {"start": 12.0, "end": 12.2, "midi": 64},
             {"start": 12.5, "end": 13.5, "midi": 60},
         ]
-        svg, _t, _x = report.staff_svg(
+        svg, _t, _x, _m = report.staff_svg(
             events, 8.0, 16.0, beats=beats, downbeats=downbeats
         )
         self.assertEqual(svg.count('class="tsig"'), 4)  # 4/4 on both staves
@@ -496,14 +510,14 @@ class NoteRollTests(unittest.TestCase):
         self.assertIn('class="stem"', svg)
 
     def test_no_beat_grid_stays_unmetered(self):
-        svg, _t, _x = report.staff_svg(
+        svg, _t, _x, _m = report.staff_svg(
             [{"start": 10.0, "end": 10.4, "midi": 60}], 8.0, 40.0
         )
         for cls in ("tsig", "barline", "beam", "flag", "stem"):
             self.assertNotIn('class="{}"'.format(cls), svg)
 
     def test_middle_c_takes_one_ledger_not_a_tower(self):
-        svg, _times, _xs = report.staff_svg(
+        svg, _times, _xs, _m = report.staff_svg(
             [{"start": 10.0, "end": 10.4, "midi": 60}], 8.0, 40.0
         )
         self.assertEqual(svg.count('class="ledger"'), 1)
