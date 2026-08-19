@@ -33,7 +33,9 @@ time-synced lyrics (karaoke line + clickable lines); keyboard transport
 and ⌘-click A/B looping for practice; plain clicks move the playhead without
 autoplay; ⌥-click sounds a note (or the whole moment when the
 click misses one), ⌥-drag sweeps through the notes with held, cross-
-fading voices (Web Audio, chord columns strum).
+fading voices, and holding ⌥ surfaces a per-section ▶ tones button that
+plays the transcription as synth at tempo (Web Audio, chord columns
+strum).
 The report embeds a compact AAC preview as a data URI when ffmpeg is present
 and small enough; otherwise it degrades to a relative src and says so.
 
@@ -157,9 +159,9 @@ explicitly asks.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-296 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
+297 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 304.
+runs 305.
 
 `tests/fakes.py` fakes **only the socket** — it reuses the real host allow-list
 check and the real poll loop, so adapter tests exercise the genuine security

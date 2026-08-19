@@ -218,10 +218,12 @@ def note_roll(events, start, end, *, width=1000, row=8):
             opacity = 0.35 + 0.65 * max(0.0, min(float(velocity) / 127.0, 1.0))
         parts.append(
             '<rect class="nr" data-midi="{m}" data-start="{s}" '
+            'data-dur="{d}" '
             'x="{x:.1f}" y="{y}" width="{w:.1f}" height="{h}" rx="2" '
             'opacity="{o:.2f}">'
             "<title>{name} · {t}s</title></rect>".format(
                 m=n["midi"], s=round(float(n["start"]), 2),
+                d=max(round(float(n["end"]) - float(n["start"]), 2), 0.05),
                 x=x, y=y + 1, w=w, h=row - 2, o=opacity,
                 name=_esc(note_name(n["midi"])),
                 t=round(float(n["start"]), 1),
@@ -886,7 +888,10 @@ class SectionPanel:
             'open><summary><span class="seclabel" style="--hue:{hue}">'
             "{label}</span>"
             '<span class="range">{c0}–{c1}</span>'
-            '<span class="prog-mini">{mini}</span></summary>'
+            '<span class="prog-mini">{mini}</span>'
+            '<button class="tonesbtn" type="button" '
+            'title="Play this section\'s transcribed notes as tones, at '
+            'tempo">▶ tones</button></summary>'
             '<div class="views">{panes}</div>'
             "{lick}</details>".format(
                 t0=self.start, t1=self.end, hue=hue,
@@ -1279,6 +1284,12 @@ _TEMPLATE = """<!DOCTYPE html>
   }}
   .loopbadge {{ margin-left: .6rem; color: var(--accent);
     font-weight: 650; }}
+  .tonesbtn {{ display: none; margin-left: auto; border: 1px solid
+    var(--accent); background: var(--accent-soft); color: var(--accent);
+    border-radius: 999px; padding: .1rem .6rem; font: 600 .74rem
+    -apple-system, sans-serif; cursor: pointer; }}
+  body.altdown .tonesbtn, .tonesbtn.playing {{ display: inline-block; }}
+  .tonesbtn.playing {{ background: var(--accent); color: #fff; }}
 
   .tophead {{ display: flex; align-items: center; gap: 1rem;
     justify-content: space-between; }}
@@ -1453,7 +1464,9 @@ a plain click moves the playhead without starting playback ·
 <kbd>⌥</kbd>-click a notehead to hear that pitch ring, ⌥-click beside
 the notes to hear everything sounding at that moment (chord columns
 strum the grip), and ⌥-drag across a chart to play through the notes
-as you sweep — they hold while you hold ·
+as you sweep — they hold while you hold · holding <kbd>⌥</kbd> also
+surfaces a ▶ tones button on each section that plays its transcription
+back as synth at the song's own tempo ·
 each section's <code>music-stack lick</code> command re-transcribes just
 that span for note-perfect tab, scale, and sheet music.</p>
 <p><b>Accuracy</b> — transcription is machine listening on a full mix:
@@ -1471,7 +1484,7 @@ neck.</p>
 <div class="keys"><kbd>space</kbd> play / pause &nbsp; <kbd>←</kbd>
 <kbd>→</kbd> scrub 1s &nbsp; click moves the playhead &nbsp;
 <kbd>⌥</kbd>-click a note (or a moment) to hear it, ⌥-drag to play
-through &nbsp;
+through, hold <kbd>⌥</kbd> for each section's ▶ tones button &nbsp;
 <kbd>⌘</kbd>-click two spots to loop a passage, <kbd>esc</kbd> clears
 <span class="loopbadge" id="loopbadge" hidden></span></div>
 </div>
@@ -1603,6 +1616,107 @@ through &nbsp;
         voices.push({{osc: osc, gain: gain}});
       }});
     }}
+
+    // -- tones playback: the transcription rendered as synth, at tempo --
+    var tones = {{nodes: [], btn: null, timer: null}};
+    var compressor = null;
+    function toneBus() {{
+      audioCtx = audioCtx ||
+        new (window.AudioContext || window.webkitAudioContext)();
+      if (!compressor) {{
+        compressor = audioCtx.createDynamicsCompressor();
+        compressor.connect(audioCtx.destination);
+      }}
+      return compressor;
+    }}
+    function stopTones() {{
+      if (tones.timer) clearTimeout(tones.timer);
+      var now = audioCtx ? audioCtx.currentTime : 0;
+      tones.nodes.forEach(function (v) {{
+        try {{
+          v.gain.gain.cancelScheduledValues(now);
+          v.gain.gain.setValueAtTime(
+            Math.max(v.gain.gain.value, 0.0001), now
+          );
+          v.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+          v.osc.stop(now + 0.2);
+        }} catch (err) {{}}
+      }});
+      tones.nodes = [];
+      if (tones.btn) {{
+        tones.btn.textContent = "▶ tones";
+        tones.btn.classList.remove("playing");
+      }}
+      tones.btn = null;
+      tones.timer = null;
+    }}
+    function playTones(panel, btn) {{
+      var notes = [];
+      panel.querySelectorAll(".nr[data-midi][data-start]").forEach(
+        function (n) {{
+          notes.push({{
+            midi: parseInt(n.dataset.midi, 10),
+            start: parseFloat(n.dataset.start),
+            dur: parseFloat(n.dataset.dur || "0.3")
+          }});
+        }}
+      );
+      if (!notes.length) return;
+      var bus;
+      try {{ bus = toneBus(); }} catch (err) {{ return; }}
+      stopTones();
+      var first = Infinity;
+      notes.forEach(function (n) {{ first = Math.min(first, n.start); }});
+      var base = audioCtx.currentTime + 0.08;
+      var last = 0;
+      notes.forEach(function (n) {{
+        var at = base + (n.start - first);
+        var dur = Math.max(n.dur, 0.08);
+        var osc = audioCtx.createOscillator();
+        var filter = audioCtx.createBiquadFilter();
+        var gain = audioCtx.createGain();
+        osc.type = "triangle";
+        osc.frequency.value = 440 * Math.pow(2, (n.midi - 69) / 12);
+        filter.type = "lowpass";
+        filter.frequency.value = 2400;
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(0.18, at + 0.012);
+        gain.gain.setValueAtTime(0.18, at + Math.max(dur - 0.1, 0.02));
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + dur + 0.15);
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(bus);
+        osc.start(at);
+        osc.stop(at + dur + 0.25);
+        tones.nodes.push({{osc: osc, gain: gain}});
+        last = Math.max(last, n.start - first + dur);
+      }});
+      tones.btn = btn;
+      btn.textContent = "■ stop";
+      btn.classList.add("playing");
+      tones.timer = setTimeout(stopTones, (last + 0.5) * 1000);
+    }}
+    document.querySelectorAll(".tonesbtn").forEach(function (btn) {{
+      btn.addEventListener("click", function (e) {{
+        e.preventDefault();
+        e.stopPropagation();
+        if (tones.btn === btn) {{
+          stopTones();
+        }} else {{
+          playTones(btn.closest(".panel"), btn);
+        }}
+      }});
+    }});
+    // The buttons surface while alt is held (and stay while playing).
+    document.addEventListener("keydown", function (e) {{
+      if (e.key === "Alt") document.body.classList.add("altdown");
+    }});
+    document.addEventListener("keyup", function (e) {{
+      if (e.key === "Alt") document.body.classList.remove("altdown");
+    }});
+    window.addEventListener("blur", function () {{
+      document.body.classList.remove("altdown");
+    }});
 
     // Capture-phase: swallow the click that follows an audition drag;
     // otherwise, with alt held, a click on a notehead sounds exactly
@@ -2012,6 +2126,7 @@ through &nbsp;
     document.addEventListener("keydown", function (e) {{
       if (e.code === "Escape") {{
         clearLoop();
+        stopTones();
         return;
       }}
       if (e.metaKey || e.ctrlKey || e.altKey) return;

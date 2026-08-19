@@ -268,6 +268,24 @@ class ChordSvgTests(unittest.TestCase):
         self.assertIn("e.altKey", html)
         self.assertIn("only moves the playhead", html)
 
+    def test_tones_playback_is_wired(self):
+        data = payload()
+        data["stages"]["chords"] = {
+            "chords": [
+                {"start": 10.0, "end": 10.9, "symbol": "C",
+                 "shorthand": "x32010",
+                 "positions": [{"string": 5, "fret": 3}]},
+            ],
+            "notes": [{"start": 10.0, "end": 10.62, "midi": 64}],
+        }
+        html = report.build(data)
+        # Durations travel with the roll so playback keeps the tempo.
+        self.assertIn('data-dur="0.62"', html)
+        self.assertIn('class="tonesbtn"', html)
+        for marker in ("playTones", "stopTones", "altdown",
+                       "DynamicsCompressor"):
+            self.assertIn(marker, html)
+
     def test_alt_drag_audition_is_wired(self):
         html = report.build(payload())
         # Sustained voices start on mousedown, retrigger per moment
