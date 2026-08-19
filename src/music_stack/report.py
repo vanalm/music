@@ -213,10 +213,10 @@ def note_roll(events, start, end, *, width=1000, row=8):
         if velocity is not None:
             opacity = 0.35 + 0.65 * max(0.0, min(float(velocity) / 127.0, 1.0))
         parts.append(
-            '<rect class="nr" x="{x:.1f}" y="{y}" width="{w:.1f}" '
-            'height="{h}" rx="2" opacity="{o:.2f}">'
+            '<rect class="nr" data-midi="{m}" x="{x:.1f}" y="{y}" '
+            'width="{w:.1f}" height="{h}" rx="2" opacity="{o:.2f}">'
             "<title>{name} · {t}s</title></rect>".format(
-                x=x, y=y + 1, w=w, h=row - 2, o=opacity,
+                m=n["midi"], x=x, y=y + 1, w=w, h=row - 2, o=opacity,
                 name=_esc(note_name(n["midi"])),
                 t=round(float(n["start"]), 1),
             )
@@ -514,9 +514,10 @@ def staff_svg(events, start, end, *, col_step=26, gutter=48, beats=None,
                     )
                 )
             parts.append(
-                '<ellipse class="{cls}" cx="{x:.1f}" cy="{y}" rx="4.6" '
-                'ry="3.4"><title>{name} · {t}s</title></ellipse>'.format(
-                    cls=head_class, x=x, y=ny,
+                '<ellipse class="{cls}" data-midi="{m}" cx="{x:.1f}" '
+                'cy="{y}" rx="4.6" ry="3.4">'
+                "<title>{name} · {t}s</title></ellipse>".format(
+                    cls=head_class, m=midi, x=x, y=ny,
                     name=_esc(note_name(midi, flats=True)),
                     t=round(float(col["start"]), 1),
                 )
@@ -837,37 +838,45 @@ def build(result, *, audio_path=None, chords=None):
                 for pos_label, seed in (
                     ("low", None), ("5th", 5), ("9th", 9)
                 ):
+                    positioned = notes_mod.choose_positions(
+                        ordered, strings=(1, 2, 3, 4, 5, 6),
+                        prefer_fret=seed,
+                    )
                     tab_text = notes_mod.render_tab(
-                        notes_mod.choose_positions(
-                            ordered, strings=(1, 2, 3, 4, 5, 6),
-                            prefer_fret=seed,
-                        ),
-                        strings=(1, 2, 3, 4, 5, 6), width=3,
+                        positioned, strings=(1, 2, 3, 4, 5, 6), width=3
                     )
                     if tab_text in seen_tabs:
                         continue
                     seen_tabs.add(tab_text)
-                    variants.append((pos_label, tab_text))
+                    # string:midi per column, so a click on the fret digit
+                    # can sound that exact note.
+                    cells = ";".join(
+                        "{}:{}".format(p["string"], p["midi"])
+                        if p.get("string") else ""
+                        for p in positioned
+                    )
+                    variants.append((pos_label, tab_text, cells))
                 buttons = "".join(
                     '<button type="button" class="postab{act}" '
                     'data-pos="{i}">{lbl}</button>'.format(
                         act=" active" if i == 0 else "", i=i, lbl=_esc(lbl)
                     )
-                    for i, (lbl, _t) in enumerate(variants)
+                    for i, (lbl, _t, _c) in enumerate(variants)
                 )
                 bodies = "".join(
                     '<div class="tabvar{act}" data-pos="{i}">'
                     '<div class="tabwrap" data-start="{t0}" '
                     'data-end="{t1}" data-times="{times}" data-lead="2" '
-                    'data-colw="4"><div class="tabinner">'
+                    'data-colw="4" data-cells="{cells}">'
+                    '<div class="tabinner">'
                     '<pre class="tab">{tab}</pre>{words}'
                     '<div class="roll-line tab-line"></div></div></div>'
                     "</div>".format(
                         act=" active" if i == 0 else "", i=i,
                         t0=s_start, t1=s_end, times=times, tab=_esc(tab_text),
-                        words=tab_words,
+                        cells=cells, words=tab_words,
                     )
-                    for i, (_lbl, tab_text) in enumerate(variants)
+                    for i, (_lbl, tab_text, cells) in enumerate(variants)
                 )
                 selector = ""
                 if len(variants) > 1:
@@ -928,14 +937,28 @@ def build(result, *, audio_path=None, chords=None):
             chord_times = ",".join(
                 str(round(t0, 2)) for _sym, t0, _t1 in events
             )
+            # All of a grip's string:midi pairs per column — a click on
+            # any of its frets strums the whole chord.
+            from .notes import STANDARD_TUNING
+
+            chord_cells = ";".join(
+                ",".join(
+                    "{}:{}".format(
+                        p["string"], STANDARD_TUNING[p["string"]] + p["fret"]
+                    )
+                    for p in (canon.get(sym) and canon[sym][1] or [])
+                )
+                for sym, _t0, _t1 in events
+            )
             chart_view = (
                 '<div class="chips">{chips}</div>'
                 '<div class="tabwrap" data-start="{t0}" data-end="{t1}" '
-                'data-times="{times}" data-lead="2" data-colw="7">'
+                'data-times="{times}" data-lead="2" data-colw="7" '
+                'data-cells="{cells}">'
                 '<div class="tabinner"><pre class="tab">{tab}</pre>'
                 '<div class="roll-line tab-line"></div></div></div>'.format(
                     chips=chips, t0=s_start, t1=s_end, times=chord_times,
-                    tab=_esc(chord_tab),
+                    cells=chord_cells, tab=_esc(chord_tab),
                 )
             )
 
@@ -1180,8 +1203,8 @@ _TEMPLATE = """<!DOCTYPE html>
   .roll {{ display: block; }}
   .roll .octave {{ stroke: var(--line); stroke-width: 1; }}
   .roll .octlabel {{ fill: var(--muted); font: 600 9px sans-serif; }}
-  .roll .nr {{ fill: var(--note); }}
-  .roll .nr:hover {{ fill: var(--fg); }}
+  .roll .nr {{ fill: var(--note); cursor: pointer; }}
+  .roll .nr:hover {{ fill: var(--accent); }}
   .roll-line {{
     position: absolute; top: 0; bottom: 0; left: 0; width: 1.5px;
     background: var(--accent); display: none; pointer-events: none;
@@ -1291,8 +1314,8 @@ _TEMPLATE = """<!DOCTYPE html>
   .staff .clef {{ font-size: 40px; fill: var(--fg); }}
   .staff .bclef {{ font-size: 30px; }}
   .staff .acc {{ font-size: 10px; fill: var(--fg); }}
-  .staff .sn {{ fill: var(--note); }}
-  .staff .sn:hover {{ fill: var(--fg); }}
+  .staff .sn {{ fill: var(--note); cursor: pointer; }}
+  .staff .sn:hover {{ fill: var(--accent); }}
   .staff .sn.open {{ fill: var(--card); stroke: var(--note);
     stroke-width: 1.6; }}
   .staff .stem {{ stroke: var(--note); stroke-width: 1.4; }}
@@ -1364,6 +1387,8 @@ dependency-free HTML/SVG with the audio embedded — mail it to anyone.</p>
 <kbd>→</kbd> scrub · click the timeline, a chord chip, a note name, or
 anywhere in a roll or staff to jump there · the toggle switches every
 section between Piano roll, Guitar tab, Sheet music, and Chord chart ·
+click any notehead, roll bar, or fret number to hear that pitch ring
+(chord columns strum the grip) ·
 each section's <code>music-stack lick</code> command re-transcribes just
 that span for note-perfect tab, scale, and sheet music.</p>
 <p><b>Accuracy</b> — transcription is machine listening on a full mix:
@@ -1436,6 +1461,47 @@ neck.</p>
       }}
     );
     if (!player) return;
+
+    // -- note preview: click a notehead, hear its pitch ------------------
+    var audioCtx = null;
+    function previewTone(midis) {{
+      try {{
+        audioCtx = audioCtx ||
+          new (window.AudioContext || window.webkitAudioContext)();
+      }} catch (err) {{ return; }}
+      var now = audioCtx.currentTime;
+      midis.forEach(function (m, i) {{
+        var at = now + i * 0.035;  // chords strum slightly, like a hand
+        var osc = audioCtx.createOscillator();
+        var filter = audioCtx.createBiquadFilter();
+        var gain = audioCtx.createGain();
+        osc.type = "triangle";
+        osc.frequency.value = 440 * Math.pow(2, (m - 69) / 12);
+        filter.type = "lowpass";
+        filter.frequency.value = 2400;
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(
+          0.28 / Math.sqrt(midis.length), at + 0.012
+        );
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + 1.5);
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(at);
+        osc.stop(at + 1.6);
+      }});
+    }}
+    // Capture-phase so a notehead click previews instead of seeking;
+    // cmd-clicks fall through to the loop logic.
+    document.addEventListener("click", function (e) {{
+      if (e.metaKey || e.ctrlKey) return;
+      var target = e.target;
+      var el = target && target.closest
+        ? target.closest(".nr[data-midi], .sn[data-midi]") : null;
+      if (!el) return;
+      e.stopPropagation();
+      previewTone([parseInt(el.dataset.midi, 10)]);
+    }}, true);
 
     // -- A/B loop: cmd-click two spots, escape clears -------------------
     var loop = {{a: null, b: null}};
@@ -1566,6 +1632,17 @@ neck.</p>
         xs: w.dataset.xs
           ? w.dataset.xs.split(",").map(parseFloat).filter(isFinite)
           : null,
+        cells: w.dataset.cells
+          ? w.dataset.cells.split(";").map(function (col) {{
+              var notes = {{}};
+              col.split(",").forEach(function (pair) {{
+                var sm = pair.split(":");
+                if (sm.length === 2) notes[parseInt(sm[0], 10)] =
+                  parseInt(sm[1], 10);
+              }});
+              return notes;
+            }})
+          : null,
         line: w.querySelector(".tab-line"),
         t0: parseFloat(w.dataset.start),
         t1: parseFloat(w.dataset.end),
@@ -1596,13 +1673,38 @@ neck.</p>
           pre.appendChild(probe);
           var chpx = probe.offsetWidth || 8;
           pre.removeChild(probe);
+          var style = getComputedStyle(pre);
           var rect = pre.getBoundingClientRect();
-          var pad = parseFloat(getComputedStyle(pre).paddingLeft) || 0;
+          var pad = parseFloat(style.paddingLeft) || 0;
           var xch = (e.clientX - rect.left - pad) / chpx;
           best = Math.round(
             (xch - entry.lead - entry.colw / 2) / entry.colw
           );
           best = Math.max(0, Math.min(entry.times.length - 1, best));
+          // A click on a fret digit sounds that note (a chord column
+          // strums the grip) instead of seeking.
+          if (entry.cells && !(e.metaKey || e.ctrlKey)) {{
+            var lineH = parseFloat(style.lineHeight) || 14;
+            var padTop = parseFloat(style.paddingTop) || 0;
+            var row = Math.floor(
+              (e.clientY - rect.top - padTop) / lineH
+            );
+            var center = entry.lead + best * entry.colw +
+              entry.colw / 2;
+            var notes = entry.cells[best] || {{}};
+            var onDigit = row >= 0 && row < 6 &&
+              Math.abs(xch - center) <= entry.colw / 2 &&
+              notes[row + 1] !== undefined;
+            if (onDigit) {{
+              var midis = Object.keys(notes).map(function (s) {{
+                return notes[s];
+              }});
+              previewTone(
+                midis.length > 1 ? midis : [notes[row + 1]]
+              );
+              return;
+            }}
+          }}
         }}
         seekOrLoop(e, entry.times[best]);
       }});

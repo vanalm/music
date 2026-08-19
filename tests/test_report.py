@@ -244,6 +244,34 @@ class ChordSvgTests(unittest.TestCase):
         self.assertIn('e.code === "ArrowRight"', html)
         self.assertIn('e.code === "ArrowLeft"', html)
 
+    def test_notes_carry_midi_for_click_to_hear(self):
+        roll = report.note_roll(
+            [{"start": 10.0, "end": 10.4, "midi": 64}], 8.0, 40.0
+        )
+        self.assertIn('data-midi="64"', roll)
+        svg, _t, _x = report.staff_svg(
+            [{"start": 10.0, "end": 10.4, "midi": 64}], 8.0, 40.0
+        )
+        self.assertIn('data-midi="64"', svg)
+
+    def test_tab_and_chord_cells_carry_string_midi_pairs(self):
+        data = payload()
+        data["stages"]["chords"] = {
+            "chords": [
+                {"start": 10.0, "end": 10.9, "symbol": "C",
+                 "shorthand": "x32010",
+                 "positions": [{"string": 5, "fret": 3}]},
+            ],
+            "notes": [{"start": 10.0, "end": 10.4, "midi": 64}],
+        }
+        html = report.build(data)
+        # Guitar tab: E4 open high e -> string 1, midi 64.
+        self.assertIn('data-cells="1:64"', html)
+        # Chord chart: C's textbook grip starts on string 5 fret 3 -> C3.
+        self.assertIn("5:48", html)
+        self.assertIn("previewTone", html)
+        self.assertIn("AudioContext", html)
+
     def test_ab_loop_is_wired(self):
         html = report.build(payload())
         # cmd-click sets the points, escape clears, the region is shaded,
