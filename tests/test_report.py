@@ -174,7 +174,7 @@ class ChordsFromResultTests(unittest.TestCase):
         data["stages"]["chords"] = {"chords": self.CHORDS}
         data["stages"]["normalize"]["file"] = "/tmp/p/normalized/song.wav"
         html = report.build(data)
-        self.assertIn('class="progression"', html)
+        self.assertIn('class="progression score"', html)
         self.assertIn("verse", html)
         self.assertIn("x32010", html)          # chord box card
         self.assertIn("music-stack lick --input", html)
@@ -186,7 +186,10 @@ class ChordsFromResultTests(unittest.TestCase):
         # A chip per played chord, timed so the script can light it up.
         self.assertIn('<span class="chip" data-start="7.0" data-end="7.8">C', html)
         # Each section panel carries its span and a tab chart.
-        self.assertIn('<details class="panel" data-start="6.5"', html)
+        self.assertIn('<section class="panel scoreblock" data-start="6.5"',
+                      html)
+        # Sections join into one continuous score surface.
+        self.assertIn('class="progression score"', html)
         self.assertIn('<pre class="tab">', html)
         self.assertIn("e|", html)
 
@@ -196,7 +199,7 @@ class ChordsFromResultTests(unittest.TestCase):
 
     def test_no_chords_no_section(self):
         html = report.build(payload())
-        self.assertNotIn('class="progression"', html)
+        self.assertNotIn('class="progression', html)
 
 
 class EscapingTests(unittest.TestCase):

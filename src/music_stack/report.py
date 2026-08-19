@@ -884,16 +884,17 @@ class SectionPanel:
             )
         hue = _SECTION_HUES.get(str(self.label or "").lower(), 210)
         return (
-            '<details class="panel" data-start="{t0}" data-end="{t1}" '
-            'open><summary><span class="seclabel" style="--hue:{hue}">'
-            "{label}</span>"
+            '<section class="panel scoreblock" data-start="{t0}" '
+            'data-end="{t1}">'
+            '<header class="blockhead"><span class="seclabel" '
+            'style="--hue:{hue}">{label}</span>'
             '<span class="range">{c0}–{c1}</span>'
             '<span class="prog-mini">{mini}</span>'
             '<button class="tonesbtn" type="button" '
             'title="Play this section\'s transcribed notes as tones, at '
-            'tempo">▶ tones</button></summary>'
+            'tempo">▶ tones</button></header>'
             '<div class="views">{panes}</div>'
-            "{lick}</details>".format(
+            "{lick}</section>".format(
                 t0=self.start, t1=self.end, hue=hue,
                 label=_esc(self.label or "all"),
                 c0=_clock(self.start), c1=_clock(self.end),
@@ -1075,7 +1076,9 @@ def build(result, *, audio_path=None, chords=None):
             panels.append(panel.render())
         prog_html = ""
         if panels:
-            prog_html = '<div class="progression">{}</div>'.format(
+            # One continuous score surface: the sections flow into each
+            # other, separated only by their header lines.
+            prog_html = '<div class="progression score">{}</div>'.format(
                 "".join(panels)
             )
             # One switcher drives every section; it lives in the sticky
@@ -1170,7 +1173,7 @@ _TEMPLATE = """<!DOCTYPE html>
     margin: 0; background: var(--bg); color: var(--fg);
     -webkit-font-smoothing: antialiased;
   }}
-  main {{ max-width: 54rem; margin: 0 auto; padding: 1.4rem 1.2rem 4rem; }}
+  main {{ max-width: 62rem; margin: 0 auto; padding: 1.4rem 1.2rem 4rem; }}
   h1 {{ font-size: 1.55rem; letter-spacing: -.02em; margin: .4rem 0 .1rem; }}
   h2 {{ font-size: .8rem; letter-spacing: .09em; text-transform: uppercase;
         color: var(--muted); margin: 2.6rem 0 .8rem; }}
@@ -1229,20 +1232,28 @@ _TEMPLATE = """<!DOCTYPE html>
   .stems a {{ color: var(--accent); text-decoration: none; }}
   .stems a:hover {{ text-decoration: underline; }}
 
-  .progression .panel {{
+  /* One continuous score: sections flow inside a single card, joined by
+     hairline rules; the playing section gets a quiet accent bar in the
+     margin instead of its own box. */
+  .score {{
     background: var(--card); border: 1px solid var(--line);
-    border-radius: 14px; margin: .8rem 0; padding: .9rem 1.1rem;
-    transition: border-color .15s, box-shadow .15s;
+    border-radius: 16px; padding: .4rem 1.6rem .6rem; margin: .9rem 0;
   }}
-  .progression .panel.now {{
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
+  .scoreblock {{
+    position: relative; padding: 1.05rem 0 1.25rem;
+    border-top: 1px solid
+      color-mix(in srgb, var(--line) 55%, transparent);
   }}
-  .progression summary {{
-    cursor: pointer; display: flex; align-items: baseline; gap: .6rem;
-    list-style: none; flex-wrap: wrap;
+  .scoreblock:first-child {{ border-top: 0; }}
+  .scoreblock.now::before {{
+    content: ""; position: absolute; left: -1.6rem; top: 1rem;
+    bottom: 1rem; width: 3px; border-radius: 0 2px 2px 0;
+    background: var(--accent);
   }}
-  .progression summary::-webkit-details-marker {{ display: none; }}
+  .blockhead {{
+    display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap;
+    margin-bottom: .35rem;
+  }}
   .seclabel {{
     font-size: .72rem; font-weight: 700; letter-spacing: .04em;
     text-transform: uppercase; color: #fff; padding: .12rem .6rem;
