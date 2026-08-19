@@ -268,6 +268,15 @@ class ChordSvgTests(unittest.TestCase):
         self.assertIn("e.altKey", html)
         self.assertIn("only moves the playhead", html)
 
+    def test_alt_drag_audition_is_wired(self):
+        html = report.build(payload())
+        # Sustained voices start on mousedown, retrigger per moment
+        # crossed, and release on mouseup; the follow-up click is eaten.
+        for marker in ("holdTones", "releaseVoices", "auditionMove",
+                       "beginAudition", "suppressClick"):
+            self.assertIn(marker, html)
+        self.assertIn("⌥-drag", html)
+
     def test_tab_and_chord_cells_carry_string_midi_pairs(self):
         data = payload()
         data["stages"]["chords"] = {

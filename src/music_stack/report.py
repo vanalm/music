@@ -1450,9 +1450,10 @@ dependency-free HTML/SVG with the audio embedded — mail it to anyone.</p>
 anywhere in a roll or staff to jump there · the toggle switches every
 section between Piano roll, Guitar tab, Sheet music, and Chord chart ·
 a plain click moves the playhead without starting playback ·
-<kbd>⌥</kbd>-click a notehead to hear that pitch ring, or ⌥-click beside
+<kbd>⌥</kbd>-click a notehead to hear that pitch ring, ⌥-click beside
 the notes to hear everything sounding at that moment (chord columns
-strum the grip) ·
+strum the grip), and ⌥-drag across a chart to play through the notes
+as you sweep — they hold while you hold ·
 each section's <code>music-stack lick</code> command re-transcribes just
 that span for note-perfect tab, scale, and sheet music.</p>
 <p><b>Accuracy</b> — transcription is machine listening on a full mix:
@@ -1469,7 +1470,8 @@ neck.</p>
 {viewbar}
 <div class="keys"><kbd>space</kbd> play / pause &nbsp; <kbd>←</kbd>
 <kbd>→</kbd> scrub 1s &nbsp; click moves the playhead &nbsp;
-<kbd>⌥</kbd>-click a note (or a moment) to hear it &nbsp;
+<kbd>⌥</kbd>-click a note (or a moment) to hear it, ⌥-drag to play
+through &nbsp;
 <kbd>⌘</kbd>-click two spots to loop a passage, <kbd>esc</kbd> clears
 <span class="loopbadge" id="loopbadge" hidden></span></div>
 </div>
@@ -1556,10 +1558,64 @@ neck.</p>
         osc.stop(at + 1.6);
       }});
     }}
-    // Capture-phase: with alt held, a click on a notehead sounds exactly
+    // Sustained voices for alt-drag auditioning: start on entry, hold
+    // while the pointer stays, cross-fade on the next moment, release
+    // with a fade on mouseup.
+    var voices = [];
+    function releaseVoices(fade) {{
+      if (!audioCtx) {{ voices = []; return; }}
+      var now = audioCtx.currentTime;
+      voices.forEach(function (v) {{
+        try {{
+          v.gain.gain.cancelScheduledValues(now);
+          v.gain.gain.setValueAtTime(
+            Math.max(v.gain.gain.value, 0.0001), now
+          );
+          v.gain.gain.exponentialRampToValueAtTime(0.0001, now + fade);
+          v.osc.stop(now + fade + 0.05);
+        }} catch (err) {{}}
+      }});
+      voices = [];
+    }}
+    function holdTones(midis) {{
+      try {{
+        audioCtx = audioCtx ||
+          new (window.AudioContext || window.webkitAudioContext)();
+      }} catch (err) {{ return; }}
+      releaseVoices(0.22);
+      var now = audioCtx.currentTime;
+      midis.forEach(function (m) {{
+        var osc = audioCtx.createOscillator();
+        var filter = audioCtx.createBiquadFilter();
+        var gain = audioCtx.createGain();
+        osc.type = "triangle";
+        osc.frequency.value = 440 * Math.pow(2, (m - 69) / 12);
+        filter.type = "lowpass";
+        filter.frequency.value = 2400;
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(
+          0.26 / Math.sqrt(midis.length), now + 0.02
+        );
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now);
+        voices.push({{osc: osc, gain: gain}});
+      }});
+    }}
+
+    // Capture-phase: swallow the click that follows an audition drag;
+    // otherwise, with alt held, a click on a notehead sounds exactly
     // that note. Alt-clicks that miss a note fall through to the chart
     // handlers, which sound the whole moment instead.
+    var suppressClick = false;
     document.addEventListener("click", function (e) {{
+      if (suppressClick) {{
+        suppressClick = false;
+        e.stopPropagation();
+        e.preventDefault();
+        return;
+      }}
       if (!e.altKey || e.metaKey || e.ctrlKey) return;
       var target = e.target;
       var el = target && target.closest
@@ -1719,39 +1775,11 @@ neck.</p>
         lead: parseFloat(w.dataset.lead || 2),
         colw: parseFloat(w.dataset.colw || 4)
       }};
+      entry.el = w;
       tabwraps.push(entry);
-      // Every chart seeks on click: staff by nearest column x, tab by
-      // converting the click into monospace columns.
       w.addEventListener("click", function (e) {{
-        if (!entry.times.length) return;
-        var inner = w.querySelector(".tabinner");
-        if (!inner) return;
-        var best = 0;
-        if (entry.xs) {{
-          var x = e.clientX - inner.getBoundingClientRect().left;
-          for (var i = 1; i < entry.xs.length; i++) {{
-            if (Math.abs(entry.xs[i] - x) < Math.abs(entry.xs[best] - x)) {{
-              best = i;
-            }}
-          }}
-        }} else {{
-          var pre = inner.querySelector(".tab");
-          if (!pre) return;
-          var probe = document.createElement("span");
-          probe.style.cssText =
-            "position:absolute;visibility:hidden;width:1ch";
-          pre.appendChild(probe);
-          var chpx = probe.offsetWidth || 8;
-          pre.removeChild(probe);
-          var style = getComputedStyle(pre);
-          var rect = pre.getBoundingClientRect();
-          var pad = parseFloat(style.paddingLeft) || 0;
-          var xch = (e.clientX - rect.left - pad) / chpx;
-          best = Math.round(
-            (xch - entry.lead - entry.colw / 2) / entry.colw
-          );
-          best = Math.max(0, Math.min(entry.times.length - 1, best));
-        }}
+        var best = wrapColumn(entry, e.clientX);
+        if (best === null) return;
         if (e.altKey && !(e.metaKey || e.ctrlKey)) {{
           // Alt-click: sound the whole column at that moment.
           var midis = entry.mids && entry.mids[best];
@@ -1761,6 +1789,68 @@ neck.</p>
         seekOrLoop(e, entry.times[best]);
       }});
     }});
+    // The column under a pointer position in a sequence-spaced chart:
+    // staff by nearest column x, tab by converting into monospace
+    // columns. Shared by clicks and alt-drags.
+    function wrapColumn(entry, clientX) {{
+      if (!entry.times.length) return null;
+      var inner = entry.el.querySelector(".tabinner");
+      if (!inner) return null;
+      var best = 0;
+      if (entry.xs) {{
+        var x = clientX - inner.getBoundingClientRect().left;
+        for (var i = 1; i < entry.xs.length; i++) {{
+          if (Math.abs(entry.xs[i] - x) < Math.abs(entry.xs[best] - x)) {{
+            best = i;
+          }}
+        }}
+      }} else {{
+        var pre = inner.querySelector(".tab");
+        if (!pre) return null;
+        if (!entry.chpx) {{
+          var probe = document.createElement("span");
+          probe.style.cssText =
+            "position:absolute;visibility:hidden;width:1ch";
+          pre.appendChild(probe);
+          entry.chpx = probe.offsetWidth || 8;
+          entry.padLeft =
+            parseFloat(getComputedStyle(pre).paddingLeft) || 0;
+          pre.removeChild(probe);
+        }}
+        var rect = pre.getBoundingClientRect();
+        var xch = (clientX - rect.left - entry.padLeft) / entry.chpx;
+        best = Math.round(
+          (xch - entry.lead - entry.colw / 2) / entry.colw
+        );
+        best = Math.max(0, Math.min(entry.times.length - 1, best));
+      }}
+      return best;
+    }}
+    // The moment at a pointer position in a roll: every note in the
+    // nearest vertical slice. Shared by alt-clicks and alt-drags.
+    function rollMoment(wrap, clientX) {{
+      var rect = wrap.getBoundingClientRect();
+      var frac = (clientX - rect.left) / rect.width;
+      var t0 = parseFloat(wrap.dataset.start);
+      var t1 = parseFloat(wrap.dataset.end);
+      var t = t0 + frac * (t1 - t0);
+      var nearest = null;
+      wrap.querySelectorAll(".nr[data-start]").forEach(function (n) {{
+        var d = Math.abs(parseFloat(n.dataset.start) - t);
+        if (nearest === null || d < nearest.d) {{
+          nearest = {{d: d, s: parseFloat(n.dataset.start)}};
+        }}
+      }});
+      if (nearest === null) return null;
+      var midis = [];
+      wrap.querySelectorAll(".nr[data-start]").forEach(function (n) {{
+        if (Math.abs(parseFloat(n.dataset.start) - nearest.s) <= 0.08) {{
+          midis.push(parseInt(n.dataset.midi, 10));
+        }}
+      }});
+      return {{key: nearest.s, midis: midis, time: t}};
+    }}
+
     var rolls = document.querySelectorAll(".rollwrap[data-start]");
     rolls.forEach(function (wrap) {{
       wrap.addEventListener("click", function (e) {{
@@ -1770,27 +1860,70 @@ neck.</p>
         var t1 = parseFloat(wrap.dataset.end);
         var t = t0 + frac * (t1 - t0);
         if (e.altKey) {{
-          // Alt-click that missed a note: sound the whole moment — every
-          // note in the nearest vertical slice.
-          var nearest = null;
-          wrap.querySelectorAll(".nr[data-start]").forEach(function (n) {{
-            var d = Math.abs(parseFloat(n.dataset.start) - t);
-            if (nearest === null || d < nearest.d) {{
-              nearest = {{d: d, s: parseFloat(n.dataset.start)}};
-            }}
-          }});
-          if (nearest === null) return;
-          var midis = [];
-          wrap.querySelectorAll(".nr[data-start]").forEach(function (n) {{
-            if (Math.abs(parseFloat(n.dataset.start) - nearest.s) <= 0.08) {{
-              midis.push(parseInt(n.dataset.midi, 10));
-            }}
-          }});
-          previewTone(midis);
+          var moment = rollMoment(wrap, e.clientX);
+          if (moment) previewTone(moment.midis);
           return;
         }}
         seekOrLoop(e, t);
       }});
+    }});
+
+    // -- alt-drag audition: sweep the pointer to play through the song --
+    // Mousedown starts and holds the notes under the pointer; crossing
+    // into a new moment cross-fades to its notes; mouseup lets them ring
+    // out. A drag over a single notehead plays just that note.
+    var audition = null;
+    function auditionMove(e) {{
+      if (!audition) return;
+      var key = null, midis = null;
+      var target = e.target;
+      var noteEl = target && target.closest
+        ? target.closest(".nr[data-midi], .sn[data-midi]") : null;
+      if (noteEl) {{
+        key = "n" + noteEl.dataset.midi + "@" +
+          (noteEl.dataset.start || "");
+        midis = [parseInt(noteEl.dataset.midi, 10)];
+      }} else if (audition.wrap) {{
+        var moment = rollMoment(audition.wrap, e.clientX);
+        if (moment) {{
+          key = "c" + moment.key;
+          midis = moment.midis;
+        }}
+      }} else if (audition.entry) {{
+        var idx = wrapColumn(audition.entry, e.clientX);
+        if (idx !== null) {{
+          key = "c" + idx;
+          midis = audition.entry.mids && audition.entry.mids[idx];
+        }}
+      }}
+      if (!key || !midis || !midis.length) return;
+      if (key === audition.lastKey) return;
+      audition.lastKey = key;
+      holdTones(midis);
+    }}
+    function beginAudition(state, e) {{
+      e.preventDefault();
+      audition = state;
+      auditionMove(e);
+    }}
+    rolls.forEach(function (wrap) {{
+      wrap.addEventListener("mousedown", function (e) {{
+        if (!e.altKey || e.metaKey || e.ctrlKey) return;
+        beginAudition({{wrap: wrap, lastKey: null}}, e);
+      }});
+    }});
+    tabwraps.forEach(function (entry) {{
+      entry.el.addEventListener("mousedown", function (e) {{
+        if (!e.altKey || e.metaKey || e.ctrlKey) return;
+        beginAudition({{entry: entry, lastKey: null}}, e);
+      }});
+    }});
+    document.addEventListener("mousemove", auditionMove);
+    document.addEventListener("mouseup", function () {{
+      if (!audition) return;
+      audition = null;
+      suppressClick = true;
+      releaseVoices(0.5);
     }});
     player.addEventListener("timeupdate", function () {{
       // Inside a loop region, wrap back to the start at the boundary.
