@@ -245,25 +245,33 @@ def name_columns(events, *, window=0.08):
     return cols
 
 
-def _names_row(events):
-    """The hover-free view: every note name, in order, chords stacked."""
+def _names_row(events, start, end):
+    """The hover-free view: every note name, placed at its moment.
+
+    Columns sit at the same horizontal fraction as their notes in the roll
+    above, so the eye can drop straight down. They render tiny; the page
+    script grows the column under the playhead (and its neighbours) as the
+    line passes through.
+    """
     cols = name_columns(events)
     if not cols:
         return ""
+    span = max(float(end) - float(start), 0.001)
     spans = []
     for col in cols:
         names = "".join(
             "<i>{}</i>".format(_esc(note_name(m, flats=True)))
             for m in sorted(col["midis"], reverse=True)
         )
+        left = max(0.0, min((col["start"] - start) / span * 100.0, 100.0))
         spans.append(
-            '<span class="ncol" data-start="{t0}" data-end="{t1}">'
-            "{names}</span>".format(
-                t0=round(col["start"], 2), t1=round(col["end"], 2),
-                names=names,
+            '<span class="ncol" style="left:{left:.2f}%" '
+            'data-start="{t0}" data-end="{t1}">{names}</span>'.format(
+                left=left, t0=round(col["start"], 2),
+                t1=round(col["end"], 2), names=names,
             )
         )
-    return '<div class="names">{}</div>'.format("".join(spans))
+    return '<div class="names namesline">{}</div>'.format("".join(spans))
 
 
 #: Pitch class -> (letter index C=0..B=6, accidental) using flat spellings,
@@ -281,13 +289,14 @@ def _diatonic(midi):
 
 
 def staff_svg(events, start, end, *, width=1000):
-    """A treble-staff pitch view: noteheads on the five lines, time
-    proportional left to right, ledger lines and flats where needed.
+    """A grand-staff pitch view: treble and bass clefs, time proportional
+    left to right, ledger lines and flats where needed.
 
-    Deliberately unmetered — no stems, beams, or bar lines — because the
-    transcription carries pitch and time, not note values. It reads like
-    the roll but in staff position; the MusicXML export remains the route
-    to engraved rhythm.
+    Low notes sit on the bass staff instead of dangling from the treble on
+    a tower of ledger lines; middle C takes the conventional single ledger
+    between the staves. Deliberately unmetered — no stems, beams, or bar
+    lines — because the transcription carries pitch and time, not note
+    values. The MusicXML export remains the route to engraved rhythm.
     """
     span = max(float(end) - float(start), 0.001)
     notes = [
@@ -296,29 +305,41 @@ def staff_svg(events, start, end, *, width=1000):
     ]
     if not notes:
         return ""
-    step, gutter = 4, 40
-    staff_lines = (30, 32, 34, 36, 38)  # E4 G4 B4 D5 F5
+    step, gutter = 4, 44
+    treble_lines = (30, 32, 34, 36, 38)  # E4 G4 B4 D5 F5
+    bass_lines = (18, 20, 22, 24, 26)    # G2 B2 D3 F3 A3
     diatonics = [_diatonic(n["midi"])[0] for n in notes]
     d_hi = max(38, max(diatonics)) + 2
-    d_lo = min(30, min(diatonics)) - 2
+    d_lo = min(18, min(diatonics)) - 2
 
     def y(d):
-        return 6 + (d_hi - d) * step
+        return 8 + (d_hi - d) * step
 
-    height = y(d_lo) + 6
+    height = y(d_lo) + 8
     parts = [
         '<svg class="staff" viewBox="0 0 {w} {h}" width="100%" '
         'xmlns="http://www.w3.org/2000/svg">'.format(w=width, h=height)
     ]
-    for d in staff_lines:
+    for d in treble_lines + bass_lines:
         parts.append(
-            '<line x1="{g}" y1="{y}" x2="{w}" y2="{y}" class="sline"/>'.format(
-                g=8, y=y(d), w=width
+            '<line x1="8" y1="{y}" x2="{w}" y2="{y}" class="sline"/>'.format(
+                y=y(d), w=width
             )
         )
+    # The connecting barline and both clefs.
+    parts.append(
+        '<line x1="8" y1="{t}" x2="8" y2="{b}" class="sline"/>'.format(
+            t=y(38), b=y(18)
+        )
+    )
     parts.append(
         '<text x="10" y="{y}" class="clef">\U0001d11e</text>'.format(
             y=y(30) + 2
+        )
+    )
+    parts.append(
+        '<text x="12" y="{y}" class="clef bclef">\U0001d122</text>'.format(
+            y=y(22) + 1
         )
     )
     for n in notes:
@@ -326,14 +347,28 @@ def staff_svg(events, start, end, *, width=1000):
         x = gutter + (max(float(n["start"]), start) - start) / span \
             * (width - gutter - 10)
         ny = y(d)
-        if d > 38:
+        on_treble = d >= 29
+        if on_treble:
+            if d < 30:  # middle C: one ledger below the treble staff
+                parts.append(
+                    '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
+                    'class="ledger"/>'.format(x0=x - 8, x1=x + 8, y=y(28))
+                )
             for ledger in range(40, d + 1, 2):
                 parts.append(
                     '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
                     'class="ledger"/>'.format(x0=x - 8, x1=x + 8, y=y(ledger))
                 )
-        if d < 30:
+        else:
             for ledger in range(28, d - 1, -2):
+                if ledger > 26:  # between the staves (middle C region)
+                    parts.append(
+                        '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
+                        'class="ledger"/>'.format(
+                            x0=x - 8, x1=x + 8, y=y(ledger)
+                        )
+                    )
+            for ledger in range(16, d - 1, -2):
                 parts.append(
                     '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
                     'class="ledger"/>'.format(x0=x - 8, x1=x + 8, y=y(ledger))
@@ -504,7 +539,7 @@ def build(result, *, audio_path=None, chords=None):
                 if float(e["start"]) < s_end and float(e["end"]) > s_start
             ]
 
-            # View 1 — piano roll with the note names stacked beneath.
+            # View 1 — piano roll with the note names aligned beneath it.
             roll = note_roll(sec_events, s_start, s_end)
             roll_view = '<p class="note">No notes transcribed here.</p>'
             if roll:
@@ -513,22 +548,35 @@ def build(result, *, audio_path=None, chords=None):
                     'data-end="{t1}">{roll}'
                     '<div class="roll-line"></div></div>{names}'.format(
                         t0=s_start, t1=s_end, roll=roll,
-                        names=_names_row(sec_events),
+                        names=_names_row(sec_events, s_start, s_end),
                     )
                 )
 
-            # View 2 — every note as guitar tab, hand kept in position.
+            # View 2 — every note as guitar tab, hand kept in position. The
+            # data-times list lets the script walk a playhead through the
+            # text, one monospace column per note.
             tab_view = '<p class="note">No notes transcribed here.</p>'
             if sec_events:
-                positioned = notes_mod.choose_positions(
-                    sorted(sec_events,
-                           key=lambda e: (float(e["start"]), e["midi"])),
-                    strings=(1, 2, 3, 4, 5, 6),
+                ordered = sorted(
+                    sec_events, key=lambda e: (float(e["start"]), e["midi"])
                 )
-                tab_view = '<pre class="tab">{}</pre>'.format(
-                    _esc(notes_mod.render_tab(
-                        positioned, strings=(1, 2, 3, 4, 5, 6), width=3
-                    ))
+                positioned = notes_mod.choose_positions(
+                    ordered, strings=(1, 2, 3, 4, 5, 6)
+                )
+                times = ",".join(
+                    str(round(float(e["start"]), 2)) for e in ordered
+                )
+                tab_view = (
+                    '<div class="tabwrap" data-start="{t0}" data-end="{t1}" '
+                    'data-times="{times}" data-lead="2" data-colw="4">'
+                    '<div class="tabinner"><pre class="tab">{tab}</pre>'
+                    '<div class="roll-line tab-line"></div></div>'
+                    "</div>".format(
+                        t0=s_start, t1=s_end, times=times,
+                        tab=_esc(notes_mod.render_tab(
+                            positioned, strings=(1, 2, 3, 4, 5, 6), width=3
+                        )),
+                    )
                 )
 
             # View 3 — treble-staff pitch view.
@@ -543,7 +591,8 @@ def build(result, *, audio_path=None, chords=None):
                     )
                 )
 
-            # View 4 — the chords: chips plus the textbook-grip tab chart.
+            # View 4 — the chords: chips plus the textbook-grip tab chart,
+            # with the playhead walking chord to chord.
             chord_tab = chords_mod.render_chord_tab(
                 [
                     {"voicing": {"positions": canon[sym][1]}}
@@ -551,10 +600,17 @@ def build(result, *, audio_path=None, chords=None):
                     for sym in symbols
                 ]
             )
+            chord_times = ",".join(
+                str(round(t0, 2)) for _sym, t0, _t1 in events
+            )
             chart_view = (
                 '<div class="chips">{chips}</div>'
-                '<pre class="tab">{tab}</pre>'.format(
-                    chips=chips, tab=_esc(chord_tab)
+                '<div class="tabwrap" data-start="{t0}" data-end="{t1}" '
+                'data-times="{times}" data-lead="2" data-colw="7">'
+                '<div class="tabinner"><pre class="tab">{tab}</pre>'
+                '<div class="roll-line tab-line"></div></div></div>'.format(
+                    chips=chips, t0=s_start, t1=s_end, times=chord_times,
+                    tab=_esc(chord_tab),
                 )
             )
 
@@ -812,23 +868,34 @@ _TEMPLATE = """<!DOCTYPE html>
   .view {{ display: none; margin-top: .6rem; }}
   .view.active {{ display: block; }}
 
-  .names {{ display: flex; flex-wrap: wrap; gap: .18rem .28rem;
-    margin-top: .55rem; }}
-  .ncol {{ display: inline-flex; flex-direction: column;
-    align-items: center; padding: .12rem .3rem; border-radius: 6px;
-    background: var(--panel); border: 1px solid var(--line);
-    font: 600 .64rem/1.3 ui-monospace, "SF Mono", Menlo, monospace;
-    cursor: pointer; }}
+  .namesline {{ position: relative; height: 3.4rem; margin-top: .15rem; }}
+  .ncol {{ position: absolute; top: 0; transform: translateX(-50%);
+    display: inline-flex; flex-direction: column; align-items: center;
+    padding: 0 .1rem; border-radius: 4px;
+    font: 600 .48rem/1.25 ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--muted); opacity: .55; cursor: pointer;
+    transition: font-size .12s, opacity .12s; }}
   .ncol i {{ font-style: normal; }}
-  .ncol:hover {{ border-color: var(--accent); color: var(--accent); }}
-  .ncol.now {{ background: var(--accent); border-color: var(--accent);
-    color: #fff; }}
+  .ncol:hover {{ color: var(--accent); opacity: 1; z-index: 4; }}
+  .ncol.near {{ font-size: .6rem; opacity: .9; color: var(--fg);
+    z-index: 2; }}
+  .ncol.now {{ font-size: .72rem; opacity: 1; background: var(--accent);
+    color: #fff; z-index: 3; }}
+
+  .tabwrap {{ overflow-x: auto; border: 1px solid var(--line);
+    border-radius: 9px; background: var(--panel); }}
+  .tabinner {{ position: relative; display: inline-block;
+    min-width: 100%; }}
+  .tabwrap .tab {{ margin: 0; border: 0; background: transparent;
+    overflow: visible; }}
+  .tab-line {{ display: none; margin-left: .9rem; }}
 
   .staffwrap {{ cursor: crosshair; background: #fff; }}
   .staff {{ display: block; }}
   .staff .sline {{ stroke: #98a2b3; stroke-width: 1; }}
   .staff .ledger {{ stroke: #98a2b3; stroke-width: 1; }}
   .staff .clef {{ font-size: 40px; fill: var(--fg); }}
+  .staff .bclef {{ font-size: 30px; }}
   .staff .acc {{ font-size: 10px; fill: var(--fg); }}
   .staff .sn {{ fill: var(--accent); }}
   .staff .sn:hover {{ fill: #16181d; }}
@@ -836,7 +903,11 @@ _TEMPLATE = """<!DOCTYPE html>
   .tabfold {{ margin: .5rem 0 0; }}
   .tabfold summary {{ cursor: pointer; color: var(--muted);
     font-size: .8rem; }}
-  .tab {{ overflow-x: auto; font-size: .78rem; line-height: 1.4;
+  .tab, .tab-line {{
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .78rem;
+  }}
+  .tab {{ overflow-x: auto; line-height: 1.4;
     margin: .5rem 0 0; background: var(--panel); padding: .7rem .9rem;
     border-radius: 9px; }}
   .lickrow {{ display: flex; gap: .5rem; align-items: center;
@@ -909,8 +980,30 @@ there</div>
       }});
     }});
     var timed = document.querySelectorAll(
-      ".panel[data-start], .chip[data-start], .ncol[data-start]"
+      ".panel[data-start], .chip[data-start]"
     );
+    var nameslines = [];
+    document.querySelectorAll(".namesline").forEach(function (row) {{
+      var panel = row.closest(".panel");
+      nameslines.push({{
+        cols: Array.prototype.slice.call(row.querySelectorAll(".ncol")),
+        t0: panel ? parseFloat(panel.dataset.start) : 0,
+        t1: panel ? parseFloat(panel.dataset.end) : Infinity
+      }});
+    }});
+    var tabwraps = [];
+    document.querySelectorAll(".tabwrap[data-times]").forEach(function (w) {{
+      tabwraps.push({{
+        el: w,
+        times: (w.dataset.times || "").split(",").map(parseFloat)
+          .filter(isFinite),
+        line: w.querySelector(".tab-line"),
+        t0: parseFloat(w.dataset.start),
+        t1: parseFloat(w.dataset.end),
+        lead: parseFloat(w.dataset.lead || 2),
+        colw: parseFloat(w.dataset.colw || 4)
+      }});
+    }});
     document.querySelectorAll(".views").forEach(function (views) {{
       views.querySelectorAll(".vtab").forEach(function (btn) {{
         btn.addEventListener("click", function () {{
@@ -958,6 +1051,35 @@ there</div>
         }} else {{
           line.style.display = "none";
         }}
+      }});
+      nameslines.forEach(function (row) {{
+        var active = -1;
+        if (t >= row.t0 && t < row.t1) {{
+          for (var i = 0; i < row.cols.length; i++) {{
+            if (parseFloat(row.cols[i].dataset.start) <= t) active = i;
+            else break;
+          }}
+        }}
+        row.cols.forEach(function (col, i) {{
+          col.classList.toggle("now", i === active);
+          col.classList.toggle("near",
+            active >= 0 && (i === active - 1 || i === active + 1));
+        }});
+      }});
+      tabwraps.forEach(function (w) {{
+        if (!w.line) return;
+        if (t < w.t0 || t >= w.t1 || !w.times.length) {{
+          w.line.style.display = "none";
+          return;
+        }}
+        var idx = -1;
+        for (var i = 0; i < w.times.length; i++) {{
+          if (w.times[i] <= t) idx = i; else break;
+        }}
+        if (idx < 0) {{ w.line.style.display = "none"; return; }}
+        w.line.style.display = "block";
+        w.line.style.left = (w.lead + idx * w.colw + w.colw / 2) + "ch";
+        w.el.scrollLeft = w.line.offsetLeft - w.el.clientWidth / 2;
       }});
     }});
     document.querySelectorAll(".copy").forEach(function (btn) {{

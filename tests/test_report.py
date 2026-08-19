@@ -294,12 +294,15 @@ class NoteRollTests(unittest.TestCase):
         self.assertIn('opacity="0.66"', svg)
         self.assertIn('opacity="0.86"', svg)
 
-    def test_note_names_stack_under_the_roll_in_order(self):
-        html = report._names_row(self.EVENTS)
+    def test_note_names_align_with_their_moment_in_the_roll(self):
+        html = report._names_row(self.EVENTS, 8.0, 40.0)
         # Two quick fill notes then the chord note, in playback order.
         self.assertLess(html.index("E4"), html.index("G4"))
         self.assertLess(html.index("G4"), html.index("C3"))
         self.assertIn('data-start="10.0"', html)
+        # 10.0s into an 8..40s window = 6.25% across, matching the roll.
+        self.assertIn('style="left:6.25%"', html)
+        self.assertIn("namesline", html)
 
     def test_simultaneous_notes_share_a_column_highest_first(self):
         events = [
@@ -308,7 +311,7 @@ class NoteRollTests(unittest.TestCase):
         ]
         cols = report.name_columns(events)
         self.assertEqual(len(cols), 1)
-        html = report._names_row(events)
+        html = report._names_row(events, 4.0, 10.0)
         self.assertLess(html.index("E4"), html.index("C3"))
 
     def test_view_selector_offers_all_four_views(self):
@@ -328,16 +331,40 @@ class NoteRollTests(unittest.TestCase):
         self.assertIn('data-view="gtab"', html)
         self.assertIn("staffwrap", html)
 
-    def test_staff_draws_noteheads_ledgers_and_flats(self):
+    def test_staff_is_a_grand_staff_with_bass_clef(self):
         events = [
-            {"start": 10.0, "end": 10.4, "midi": 63},  # Eb4 -> flat
-            {"start": 11.0, "end": 11.4, "midi": 48},  # C3 -> ledger lines
+            {"start": 10.0, "end": 10.4, "midi": 63},  # Eb4 -> flat, treble
+            {"start": 11.0, "end": 11.4, "midi": 48},  # C3 -> bass staff
+            {"start": 12.0, "end": 12.4, "midi": 36},  # C2 -> ledger below
         ]
         svg = report.staff_svg(events, 8.0, 40.0)
-        self.assertEqual(svg.count('class="sn"'), 2)
+        self.assertEqual(svg.count('class="sn"'), 3)
         self.assertIn("♭", svg)
+        self.assertIn("\U0001d11e", svg)   # treble clef
+        self.assertIn("\U0001d122", svg)   # bass clef
         self.assertIn('class="ledger"', svg)
-        self.assertIn('class="clef"', svg)
+        # Ten staff lines plus the connecting barline.
+        self.assertEqual(svg.count('class="sline"'), 11)
+
+    def test_middle_c_takes_one_ledger_not_a_tower(self):
+        svg = report.staff_svg(
+            [{"start": 10.0, "end": 10.4, "midi": 60}], 8.0, 40.0
+        )
+        self.assertEqual(svg.count('class="ledger"'), 1)
+
+    def test_tab_views_carry_note_times_for_the_playhead(self):
+        data = payload()
+        data["stages"]["chords"] = {
+            "chords": [
+                {"start": 10.0, "end": 10.9, "symbol": "C",
+                 "shorthand": "x32010",
+                 "positions": [{"string": 5, "fret": 3}]},
+            ],
+            "notes": self.EVENTS,
+        }
+        html = report.build(data)
+        self.assertIn('data-times="10.0,10.5,12.0"', html)
+        self.assertIn('class="roll-line tab-line"', html)
 
     def test_rolls_appear_in_section_panels(self):
         data = payload()
