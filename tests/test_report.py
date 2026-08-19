@@ -369,7 +369,7 @@ class NoteRollTests(unittest.TestCase):
             {"start": 11.0, "end": 11.4, "midi": 48},  # C3 -> bass staff
             {"start": 12.0, "end": 12.4, "midi": 36},  # C2 -> ledger below
         ]
-        svg = report.staff_svg(events, 8.0, 40.0)
+        svg, times, xs = report.staff_svg(events, 8.0, 40.0)
         self.assertEqual(svg.count('class="sn"'), 3)
         self.assertIn("♭", svg)
         self.assertIn("\U0001d11e", svg)   # treble clef
@@ -378,11 +378,47 @@ class NoteRollTests(unittest.TestCase):
         # Ten staff lines plus the connecting barline.
         self.assertEqual(svg.count('class="sline"'), 11)
 
+    def test_staff_columns_are_evenly_spaced_with_known_x(self):
+        events = [
+            {"start": 10.0, "end": 10.4, "midi": 63},
+            {"start": 11.0, "end": 11.4, "midi": 48},
+            {"start": 12.0, "end": 12.4, "midi": 36},
+        ]
+        svg, times, xs = report.staff_svg(events, 8.0, 40.0)
+        self.assertEqual(times, [10.0, 11.0, 12.0])
+        # Engraving spacing: equal steps regardless of the time gaps.
+        self.assertEqual(xs[1] - xs[0], xs[2] - xs[1])
+        # The playhead can land exactly on a notehead: xs match the cx.
+        self.assertIn('cx="{:.1f}"'.format(xs[0]), svg)
+
+    def test_simultaneous_staff_notes_share_a_column(self):
+        events = [
+            {"start": 10.0, "end": 11.0, "midi": 48},
+            {"start": 10.03, "end": 11.0, "midi": 64},
+        ]
+        _svg, times, xs = report.staff_svg(events, 8.0, 40.0)
+        self.assertEqual(len(times), 1)
+        self.assertEqual(len(xs), 1)
+
     def test_middle_c_takes_one_ledger_not_a_tower(self):
-        svg = report.staff_svg(
+        svg, _times, _xs = report.staff_svg(
             [{"start": 10.0, "end": 10.4, "midi": 60}], 8.0, 40.0
         )
         self.assertEqual(svg.count('class="ledger"'), 1)
+
+    def test_staff_wrap_carries_column_coordinates(self):
+        data = payload()
+        data["stages"]["chords"] = {
+            "chords": [
+                {"start": 10.0, "end": 10.9, "symbol": "C",
+                 "shorthand": "x32010",
+                 "positions": [{"string": 5, "fret": 3}]},
+            ],
+            "notes": self.EVENTS,
+        }
+        html = report.build(data)
+        self.assertIn('class="tabwrap staffwrap"', html)
+        self.assertIn("data-xs=", html)
 
     def test_tab_offers_alternate_positions_with_a_selector(self):
         # A midrange melody is playable in several neck positions, so the

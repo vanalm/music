@@ -317,9 +317,15 @@ def _diatonic(midi):
     return (midi // 12 - 1) * 7 + letter, accidental
 
 
-def staff_svg(events, start, end, *, width=1000):
-    """A grand-staff pitch view: treble and bass clefs, time proportional
-    left to right, ledger lines and flats where needed.
+def staff_svg(events, start, end, *, col_step=26, gutter=48):
+    """A grand-staff pitch view with engraving-style spacing.
+
+    Notes that sound together share one column, and columns advance by a
+    fixed step the way engraved notation reads — not by wall-clock time.
+    Returns ``(svg, times, xs)``: each column's onset and its exact x in
+    the SVG's pixel space, so the page script can put the playhead
+    precisely on the notehead sounding now (the SVG renders 1:1, inside a
+    horizontal scroller). Returns ``None`` with no notes in the window.
 
     Low notes sit on the bass staff instead of dangling from the treble on
     a tower of ledger lines; middle C takes the conventional single ledger
@@ -327,32 +333,39 @@ def staff_svg(events, start, end, *, width=1000):
     lines — because the transcription carries pitch and time, not note
     values. The MusicXML export remains the route to engraved rhythm.
     """
-    span = max(float(end) - float(start), 0.001)
-    notes = [
-        e for e in events or []
-        if float(e["start"]) < end and float(e["end"]) > start
-    ]
-    if not notes:
-        return ""
-    step, gutter = 4, 44
+    cols = name_columns(
+        [
+            e for e in events or []
+            if float(e["start"]) < end and float(e["end"]) > start
+        ]
+    )
+    if not cols:
+        return None
+    step = 4
     treble_lines = (30, 32, 34, 36, 38)  # E4 G4 B4 D5 F5
     bass_lines = (18, 20, 22, 24, 26)    # G2 B2 D3 F3 A3
-    diatonics = [_diatonic(n["midi"])[0] for n in notes]
+    diatonics = [
+        _diatonic(m)[0] for col in cols for m in col["midis"]
+    ]
     d_hi = max(38, max(diatonics)) + 2
     d_lo = min(18, min(diatonics)) - 2
 
     def y(d):
         return 8 + (d_hi - d) * step
 
+    xs = [gutter + 18 + i * col_step for i in range(len(cols))]
+    width = xs[-1] + 30
     height = y(d_lo) + 8
     parts = [
-        '<svg class="staff" viewBox="0 0 {w} {h}" width="100%" '
-        'xmlns="http://www.w3.org/2000/svg">'.format(w=width, h=height)
+        '<svg class="staff" viewBox="0 0 {w} {h}" width="{w}" '
+        'height="{h}" xmlns="http://www.w3.org/2000/svg">'.format(
+            w=width, h=height
+        )
     ]
     for d in treble_lines + bass_lines:
         parts.append(
             '<line x1="8" y1="{y}" x2="{w}" y2="{y}" class="sline"/>'.format(
-                y=y(d), w=width
+                y=y(d), w=width - 8
             )
         )
     # The connecting barline and both clefs.
@@ -371,52 +384,54 @@ def staff_svg(events, start, end, *, width=1000):
             y=y(22) + 1
         )
     )
-    for n in notes:
-        d, accidental = _diatonic(n["midi"])
-        x = gutter + (max(float(n["start"]), start) - start) / span \
-            * (width - gutter - 10)
-        ny = y(d)
-        on_treble = d >= 29
-        if on_treble:
-            if d < 30:  # middle C: one ledger below the treble staff
-                parts.append(
-                    '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
-                    'class="ledger"/>'.format(x0=x - 8, x1=x + 8, y=y(28))
-                )
-            for ledger in range(40, d + 1, 2):
-                parts.append(
-                    '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
-                    'class="ledger"/>'.format(x0=x - 8, x1=x + 8, y=y(ledger))
-                )
-        else:
-            for ledger in range(28, d - 1, -2):
-                if ledger > 26:  # between the staves (middle C region)
+    for col, x in zip(cols, xs):
+        for midi in col["midis"]:
+            d, accidental = _diatonic(midi)
+            ny = y(d)
+            if d >= 29:
+                if d < 30:  # middle C: one ledger below the treble staff
+                    parts.append(
+                        '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
+                        'class="ledger"/>'.format(x0=x - 8, x1=x + 8, y=y(28))
+                    )
+                for ledger in range(40, d + 1, 2):
                     parts.append(
                         '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
                         'class="ledger"/>'.format(
                             x0=x - 8, x1=x + 8, y=y(ledger)
                         )
                     )
-            for ledger in range(16, d - 1, -2):
+            else:
+                for ledger in range(28, d - 1, -2):
+                    if ledger > 26:  # between the staves (middle C region)
+                        parts.append(
+                            '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
+                            'class="ledger"/>'.format(
+                                x0=x - 8, x1=x + 8, y=y(ledger)
+                            )
+                        )
+                for ledger in range(16, d - 1, -2):
+                    parts.append(
+                        '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
+                        'class="ledger"/>'.format(
+                            x0=x - 8, x1=x + 8, y=y(ledger)
+                        )
+                    )
+            if accidental:
                 parts.append(
-                    '<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" '
-                    'class="ledger"/>'.format(x0=x - 8, x1=x + 8, y=y(ledger))
+                    '<text x="{x}" y="{y}" class="acc">{a}</text>'.format(
+                        x=x - 13, y=ny + 3.5, a=accidental
+                    )
                 )
-        if accidental:
             parts.append(
-                '<text x="{x}" y="{y}" class="acc">{a}</text>'.format(
-                    x=x - 13, y=ny + 3.5, a=accidental
+                '<ellipse class="sn" cx="{x:.1f}" cy="{y}" rx="4.6" '
+                'ry="3.4"><title>{name} · {t}s</title></ellipse>'.format(
+                    x=x, y=ny, name=_esc(note_name(midi, flats=True)),
+                    t=round(float(col["start"]), 1),
                 )
             )
-        parts.append(
-            '<ellipse class="sn" cx="{x:.1f}" cy="{y}" rx="4.6" ry="3.4">'
-            "<title>{name} · {t}s</title></ellipse>".format(
-                x=x, y=ny, name=_esc(note_name(n["midi"], flats=True)),
-                t=round(float(n["start"]), 1),
-            )
-        )
     parts.append("</svg>")
-    return "".join(parts)
+    return "".join(parts), [c["start"] for c in cols], xs
 
 
 # -- page ------------------------------------------------------------------
@@ -654,15 +669,25 @@ def build(result, *, audio_path=None, chords=None):
                     ).format(buttons)
                 tab_view = selector + bodies
 
-            # View 3 — treble-staff pitch view.
-            staff = staff_svg(sec_events, s_start, s_end)
+            # View 3 — grand-staff view, engraving-spaced and scrollable;
+            # data-xs carries each column's exact x so the playhead sits
+            # on the notehead sounding now.
+            built = staff_svg(sec_events, s_start, s_end)
             staff_view = '<p class="note">No notes transcribed here.</p>'
-            if staff:
+            if built:
+                st_svg, st_times, st_xs = built
                 staff_view = (
-                    '<div class="rollwrap staffwrap" data-start="{t0}" '
-                    'data-end="{t1}">{staff}'
-                    '<div class="roll-line"></div></div>'.format(
-                        t0=s_start, t1=s_end, staff=staff
+                    '<div class="tabwrap staffwrap" data-start="{t0}" '
+                    'data-end="{t1}" data-times="{times}" data-xs="{xs}">'
+                    '<div class="tabinner">{staff}'
+                    '<div class="roll-line tab-line"></div></div>'
+                    "</div>".format(
+                        t0=s_start, t1=s_end,
+                        times=",".join(
+                            str(round(t, 2)) for t in st_times
+                        ),
+                        xs=",".join(str(round(x, 1)) for x in st_xs),
+                        staff=st_svg,
                     )
                 )
 
@@ -1010,7 +1035,8 @@ _TEMPLATE = """<!DOCTYPE html>
     overflow: visible; }}
   .tab-line {{ display: none; margin-left: .9rem; }}
 
-  .staffwrap {{ cursor: crosshair; background: var(--card); }}
+  .tabwrap.staffwrap {{ background: var(--card); cursor: pointer; }}
+  .tabinner svg {{ display: block; }}
   .staff {{ display: block; }}
   .staff .sline {{ stroke: #b5ad9b; stroke-width: 1; }}
   .staff .ledger {{ stroke: #b5ad9b; stroke-width: 1; }}
@@ -1180,16 +1206,36 @@ jump there</div>
     }});
     var tabwraps = [];
     document.querySelectorAll(".tabwrap[data-times]").forEach(function (w) {{
-      tabwraps.push({{
+      var entry = {{
         el: w,
         times: (w.dataset.times || "").split(",").map(parseFloat)
           .filter(isFinite),
+        xs: w.dataset.xs
+          ? w.dataset.xs.split(",").map(parseFloat).filter(isFinite)
+          : null,
         line: w.querySelector(".tab-line"),
         t0: parseFloat(w.dataset.start),
         t1: parseFloat(w.dataset.end),
         lead: parseFloat(w.dataset.lead || 2),
         colw: parseFloat(w.dataset.colw || 4)
-      }});
+      }};
+      tabwraps.push(entry);
+      if (entry.xs) {{
+        // Engraving-spaced view: a click seeks to the nearest column.
+        w.addEventListener("click", function (e) {{
+          var inner = w.querySelector(".tabinner");
+          if (!inner || !entry.times.length) return;
+          var x = e.clientX - inner.getBoundingClientRect().left;
+          var best = 0;
+          for (var i = 1; i < entry.xs.length; i++) {{
+            if (Math.abs(entry.xs[i] - x) < Math.abs(entry.xs[best] - x)) {{
+              best = i;
+            }}
+          }}
+          player.currentTime = entry.times[best];
+          player.play();
+        }});
+      }}
     }});
     var rolls = document.querySelectorAll(".rollwrap[data-start]");
     rolls.forEach(function (wrap) {{
@@ -1268,8 +1314,27 @@ jump there</div>
           if (w.times[i] <= t) idx = i; else break;
         }}
         if (idx < 0) {{ w.line.style.display = "none"; return; }}
+        // Glide between this column and the next in proportion to time,
+        // so the line moves smoothly yet is exactly on each notehead at
+        // its onset.
+        var frac = 0;
+        if (idx + 1 < w.times.length &&
+            w.times[idx + 1] > w.times[idx]) {{
+          frac = (t - w.times[idx]) / (w.times[idx + 1] - w.times[idx]);
+          frac = Math.max(0, Math.min(1, frac));
+        }}
         w.line.style.display = "block";
-        w.line.style.left = (w.lead + idx * w.colw + w.colw / 2) + "ch";
+        if (w.xs && w.xs.length === w.times.length) {{
+          var x = w.xs[idx];
+          if (idx + 1 < w.xs.length) {{
+            x += frac * (w.xs[idx + 1] - w.xs[idx]);
+          }}
+          w.line.style.left = x + "px";
+        }} else {{
+          var col = idx + (idx + 1 < w.times.length ? frac : 0);
+          w.line.style.left =
+            (w.lead + col * w.colw + w.colw / 2) + "ch";
+        }}
         w.el.scrollLeft = w.line.offsetLeft - w.el.clientWidth / 2;
       }});
     }});
