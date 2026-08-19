@@ -287,43 +287,63 @@ def build(result, *, audio_path=None, chords=None):
         chords = (stages.get("chords") or {}).get("chords")
     chords_html = ""
     if chords:
-        prog_html = ""
-        rows = []
+        from . import chords as chords_mod
+
+        canon = {
+            sym: (short, positions)
+            for sym, short, positions in brief_mod.canonical_shapes(chords)
+        }
+        panels = []
         shown = set()
         norm_file = (stages.get("normalize") or {}).get("file")
-        for label, start, symbols in brief_mod.progression_by_section(
+        for label, s_start, s_end, events in brief_mod.progression_events(
             chords, sections
         ):
+            symbols = [sym for sym, _t0, _t1 in events]
             shown.update(symbols)
-            span = next(
-                (s for s in sections if s["label"] == label
-                 and float(s["start"]) == start), None,
+            # Chips: one per chord as played — click to hear it, and the
+            # one currently sounding lights up during playback.
+            chips = "".join(
+                '<span class="chip" data-start="{t0}" data-end="{t1}">'
+                "{sym}</span>".format(t0=t0, t1=t1, sym=_esc(sym))
+                for sym, t0, t1 in events
+            )
+            tab = chords_mod.render_chord_tab(
+                [
+                    {"voicing": {"positions": canon[sym][1]}}
+                    if canon.get(sym) and canon[sym][1] else {"voicing": None}
+                    for sym in symbols
+                ]
             )
             lick = ""
-            if norm_file and span:
+            if norm_file:
                 lick = (
                     '<code class="lick">music-stack lick --input {} '
                     "--start {} --end {}</code>".format(
-                        _esc(norm_file),
-                        _clock(span["start"]), _clock(span["end"]),
+                        _esc(norm_file), _clock(s_start), _clock(s_end),
                     )
                 )
-            rows.append(
-                "<li><b>{}</b> ({}) — {} {}</li>".format(
-                    _esc(label or "all"), _clock(start),
-                    _esc(" · ".join(symbols)), lick,
+            panels.append(
+                '<details class="panel" data-start="{t0}" data-end="{t1}" '
+                "open><summary><b>{label}</b> "
+                '<span class="range">{c0}–{c1}</span></summary>'
+                '<div class="chips">{chips}</div>'
+                '<pre class="tab">{tab}</pre>{lick}</details>'.format(
+                    t0=s_start, t1=s_end, label=_esc(label or "all"),
+                    c0=_clock(s_start), c1=_clock(s_end),
+                    chips=chips, tab=_esc(tab), lick=lick,
                 )
             )
-        if rows:
-            prog_html = (
-                '<ul class="progression">{}</ul>'.format("".join(rows))
+        prog_html = ""
+        if panels:
+            prog_html = '<div class="progression">{}</div>'.format(
+                "".join(panels)
             )
         # One box per chord, the most frequently detected fingering — a
         # hand learning the song wants one shape, not every strum variant.
         cards = []
-        for sym, short, positions in brief_mod.canonical_shapes(
-            chords, symbols=shown or None
-        ):
+        for sym in sorted(shown or canon):
+            short, positions = canon.get(sym, (None, None))
             if not positions:
                 continue
             cards.append(
@@ -336,7 +356,8 @@ def build(result, *, audio_path=None, chords=None):
             )
         if cards or prog_html:
             chords_html = (
-                "<h2>Chords</h2>{prog}<div class=\"cards\">{cards}</div>"
+                "<h2>Chords</h2>{prog}"
+                "<h3>Shapes</h3><div class=\"cards\">{cards}</div>"
             ).format(prog=prog_html, cards="".join(cards))
 
     # -- questions --------------------------------------------------------
@@ -436,9 +457,21 @@ _TEMPLATE = """<!DOCTYPE html>
   .stems {{ columns: 2; padding-left: 1.2rem; }}
   .stems a {{ color: var(--accent); }}
   .cards {{ display: flex; flex-wrap: wrap; gap: 1rem; }}
-  .progression {{ list-style: none; padding: 0; }}
-  .progression li {{ margin: .35rem 0; }}
-  .progression .lick {{ display: block; margin: .15rem 0 0 1rem;
+  .progression .panel {{ margin: .6rem 0; padding: .5rem .8rem;
+    background: var(--panel); border-radius: 8px;
+    border-left: 3px solid transparent; }}
+  .progression .panel.now {{ border-left-color: var(--accent, #4f8fd6); }}
+  .progression summary {{ cursor: pointer; }}
+  .progression .range {{ opacity: .6; font-size: .85rem;
+    margin-left: .4rem; }}
+  .chips {{ margin: .5rem 0; display: flex; flex-wrap: wrap; gap: .3rem; }}
+  .chip {{ padding: .1rem .55rem; border-radius: 999px; cursor: pointer;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    font-size: .85rem; }}
+  .chip.now {{ background: var(--accent, #4f8fd6); color: #fff; }}
+  .tab {{ overflow-x: auto; font-size: .78rem; line-height: 1.35;
+    margin: .4rem 0; }}
+  .progression .lick {{ display: block; margin: .3rem 0 0;
     font-size: .78rem; opacity: .75; }}
   .card {{
     margin: 0; padding: .6rem .4rem .4rem; background: var(--panel);
@@ -480,19 +513,28 @@ _TEMPLATE = """<!DOCTYPE html>
     var playhead = document.getElementById("playhead");
     var timeline = document.getElementById("timeline");
     if (!player) return;
-    document.querySelectorAll(".seg[data-start]").forEach(function (seg) {{
-      seg.addEventListener("click", function () {{
-        player.currentTime = parseFloat(seg.dataset.start);
-        player.play();
+    document.querySelectorAll(".seg[data-start], .chip[data-start]")
+      .forEach(function (el) {{
+        el.addEventListener("click", function () {{
+          player.currentTime = parseFloat(el.dataset.start);
+          player.play();
+        }});
       }});
-    }});
-    if (playhead && timeline) {{
-      player.addEventListener("timeupdate", function () {{
-        if (!player.duration) return;
+    var timed = document.querySelectorAll(
+      ".panel[data-start], .chip[data-start]"
+    );
+    player.addEventListener("timeupdate", function () {{
+      if (playhead && timeline && player.duration) {{
         playhead.style.left =
           (100 * player.currentTime / player.duration) + "%";
+      }}
+      var t = player.currentTime;
+      timed.forEach(function (el) {{
+        var on = t >= parseFloat(el.dataset.start) &&
+                 t < parseFloat(el.dataset.end);
+        el.classList.toggle("now", on);
       }});
-    }}
+    }});
   }})();
 </script>
 </body>

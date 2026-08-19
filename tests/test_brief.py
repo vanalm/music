@@ -125,6 +125,18 @@ class ProgressionTests(unittest.TestCase):
     def test_empty_chords_is_empty_not_an_error(self):
         self.assertEqual(brief.progression_by_section([], FULL_STRUCTURE["sections"]), [])
 
+    def test_events_carry_time_ranges_for_the_interactive_report(self):
+        grouped = brief.progression_events(
+            SAMPLE_CHORDS, FULL_STRUCTURE["sections"]
+        )
+        label, span_start, span_end, events = grouped[0]
+        self.assertEqual((label, span_start, span_end), ("verse", 8.0, 40.0))
+        # The two consecutive C detections merge into one timed run.
+        self.assertEqual(events[0][0], "C")
+        self.assertEqual(events[0][1], 8.5)   # first C's start
+        self.assertEqual(events[0][2], 10.9)  # second C's end
+        self.assertEqual(events[1], ("Am", 12.0, 12.8))
+
 
 class DetectChordsTests(unittest.TestCase):
     """From a real basic-pitch CSV to named, fingered, serialisable chords."""

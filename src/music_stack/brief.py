@@ -259,14 +259,15 @@ def canonical_shapes(chords, *, symbols=None):
     )
 
 
-def progression_by_section(chords, sections):
-    """Group named chords under the structure's sections, deduped in place.
+def progression_events(chords, sections):
+    """Group named chords under the structure's sections, with time ranges.
 
-    Returns ``[(label, start_seconds, [symbols…])…]``. Without *sections*
-    everything lands under one ``None`` label. A run of chords on the same
-    root collapses to that run's most frequent symbol: a bar of strumming
-    where the transcription flickers C · Csus2 · C5 is one C, not three
-    chords — the flicker is pick attack, not harmony.
+    Returns ``[(label, span_start, span_end, [(symbol, t0, t1)…])…]``.
+    Without *sections* everything lands under one ``None`` label. A run of
+    chords on the same root collapses to that run's most frequent symbol
+    spanning the whole run: a bar of strumming where the transcription
+    flickers C · Csus2 · C5 is one C, not three chords — the flicker is
+    pick attack, not harmony.
     """
     if not chords:
         return []
@@ -277,23 +278,35 @@ def progression_by_section(chords, sections):
 
     grouped = []
     for label, start, end in spans:
-        runs = []  # [(root, [symbols in the run])…]
+        runs = []  # [(root, [symbols], run_start, run_end)…]
         for c in chords:
             when, sym = c.get("start"), c.get("symbol")
             if when is None or not sym:
                 continue  # lick-style entries carry no timeline position
-            if start <= float(when) < end:
+            t0, t1 = float(when), float(c.get("end") or when)
+            if start <= t0 < end:
                 root = _root(sym)
                 if runs and runs[-1][0] == root:
                     runs[-1][1].append(sym)
+                    runs[-1][3] = max(runs[-1][3], t1)
                 else:
-                    runs.append((root, [sym]))
-        symbols = [
-            Counter(run).most_common(1)[0][0] for _root_, run in runs
+                    runs.append([root, [sym], t0, t1])
+        events = [
+            (Counter(run).most_common(1)[0][0], t0, t1)
+            for _root_, run, t0, t1 in runs
         ]
-        if symbols:
-            grouped.append((label, start, symbols))
+        if events:
+            span_end = end if end != float("inf") else events[-1][2]
+            grouped.append((label, start, span_end, events))
     return grouped
+
+
+def progression_by_section(chords, sections):
+    """:func:`progression_events` reduced to just the symbol sequences."""
+    return [
+        (label, start, [sym for sym, _t0, _t1 in events])
+        for label, start, _end, events in progression_events(chords, sections)
+    ]
 
 
 def render(result):

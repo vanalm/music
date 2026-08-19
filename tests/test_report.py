@@ -179,6 +179,17 @@ class ChordsFromResultTests(unittest.TestCase):
         self.assertIn("x32010", html)          # chord box card
         self.assertIn("music-stack lick --input", html)
 
+    def test_section_panels_are_wired_for_live_playback(self):
+        data = payload()
+        data["stages"]["chords"] = {"chords": self.CHORDS}
+        html = report.build(data)
+        # A chip per played chord, timed so the script can light it up.
+        self.assertIn('<span class="chip" data-start="7.0" data-end="7.8">C', html)
+        # Each section panel carries its span and a tab chart.
+        self.assertIn('<details class="panel" data-start="6.5"', html)
+        self.assertIn('<pre class="tab">', html)
+        self.assertIn("e|", html)
+
     def test_explicit_chords_param_still_wins(self):
         html = report.build(payload(), chords=self.CHORDS)
         self.assertIn("x32010", html)
