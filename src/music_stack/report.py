@@ -1,9 +1,12 @@
-"""A self-contained HTML report — the closest thing this tool has to a UI.
+"""A self-contained HTML report — the play-along page, this tool's UI.
 
 ``analyze`` writes ``report.html`` next to ``brief.md``. Double-click it and
 the browser shows the song: an audio player wired to a clickable section
-timeline with a live playhead, the lyric as sung, stems, chord shapes as SVG
-boxes, and the questions.
+timeline, one :class:`SectionPanel` per section that a single switcher flips
+between piano roll, guitar tab, grand-staff sheet music, and chord chart —
+every view with a playhead that follows playback, lyrics riding the charts,
+alt-click note previews via Web Audio, ⌘-click A/B looping — plus the lyric
+as sung, chord shape cards, stems, and the songwriting questions.
 
 Constraints, deliberately:
 
@@ -26,6 +29,7 @@ import tempfile
 from pathlib import Path
 
 from . import audio as audio_mod
+from . import chords as chords_mod
 from . import notes as notes_mod
 from .notes import note_name
 
@@ -648,6 +652,266 @@ def staff_svg(events, start, end, *, col_step=26, gutter=48, beats=None,
     )
 
 
+class SectionPanel:
+    """One section of the song, rendered as switchable play-along views.
+
+    The panel is the report's unit of extensibility: each ``VIEWS`` row
+    names a view key, its switcher label, and the method that renders it.
+    Adding a view is one method plus one row — the global switcher, the
+    panes, and the page script's toggling all derive from the registry.
+    """
+
+    VIEWS = (
+        ("roll", "Piano roll", "roll_view"),
+        ("gtab", "Guitar tab", "tab_view"),
+        ("staff", "Sheet music", "staff_view"),
+        ("chart", "Chord chart", "chart_view"),
+    )
+
+    EMPTY = '<p class="note">No notes transcribed here.</p>'
+
+    def __init__(self, label, start, end, chord_events, *, all_notes,
+                 lyr_segments, canon, structure, norm_file):
+        self.label = label
+        self.start = start
+        self.end = end
+        self.chord_events = chord_events  # [(symbol, t0, t1)…]
+        self.symbols = [sym for sym, _t0, _t1 in chord_events]
+        self.lyr_segments = lyr_segments
+        self.canon = canon                # symbol -> (shorthand, positions)
+        self.structure = structure
+        self.norm_file = norm_file
+        self.events = [
+            e for e in all_notes
+            if float(e["start"]) < end and float(e["end"]) > start
+        ]
+
+    # -- the four views ----------------------------------------------------
+
+    def roll_view(self):
+        """Piano roll with note names and lyrics aligned beneath it."""
+        roll = note_roll(self.events, self.start, self.end)
+        if not roll:
+            return self.EMPTY
+        return (
+            '<div class="rollwrap" data-start="{t0}" '
+            'data-end="{t1}">{roll}'
+            '<div class="roll-line"></div></div>{names}{words}'.format(
+                t0=self.start, t1=self.end, roll=roll,
+                names=_names_row(self.events, self.start, self.end),
+                words=_words_row(self.lyr_segments, self.start, self.end),
+            )
+        )
+
+    def tab_view(self):
+        """Every note as guitar tab, in selectable neck positions.
+
+        The audio cannot say which string was played, so the same notes
+        are offered fingered from several positions. data-times lets the
+        script walk a playhead through the text, one monospace column
+        each; data-cells (string:midi per column) lets alt-clicks sound
+        the note.
+        """
+        if not self.events:
+            return self.EMPTY
+        ordered = sorted(
+            self.events, key=lambda e: (float(e["start"]), e["midi"])
+        )
+        tab_times = [round(float(e["start"]), 2) for e in ordered]
+        times = ",".join(str(t) for t in tab_times)
+        tab_words = _words_row(
+            self.lyr_segments, self.start, self.end, times=tab_times
+        )
+        variants, seen_tabs = [], set()
+        for pos_label, seed in (("low", None), ("5th", 5), ("9th", 9)):
+            positioned = notes_mod.choose_positions(
+                ordered, strings=(1, 2, 3, 4, 5, 6), prefer_fret=seed
+            )
+            tab_text = notes_mod.render_tab(
+                positioned, strings=(1, 2, 3, 4, 5, 6), width=3
+            )
+            if tab_text in seen_tabs:
+                continue
+            seen_tabs.add(tab_text)
+            cells = ";".join(
+                "{}:{}".format(p["string"], p["midi"])
+                if p.get("string") else ""
+                for p in positioned
+            )
+            variants.append((pos_label, tab_text, cells))
+        buttons = "".join(
+            '<button type="button" class="postab{act}" '
+            'data-pos="{i}">{lbl}</button>'.format(
+                act=" active" if i == 0 else "", i=i, lbl=_esc(lbl)
+            )
+            for i, (lbl, _t, _c) in enumerate(variants)
+        )
+        bodies = "".join(
+            '<div class="tabvar{act}" data-pos="{i}">'
+            '<div class="tabwrap" data-start="{t0}" '
+            'data-end="{t1}" data-times="{times}" data-lead="2" '
+            'data-colw="4" data-cells="{cells}">'
+            '<div class="tabinner">'
+            '<pre class="tab">{tab}</pre>{words}'
+            '<div class="roll-line tab-line"></div></div></div>'
+            "</div>".format(
+                act=" active" if i == 0 else "", i=i,
+                t0=self.start, t1=self.end, times=times,
+                tab=_esc(tab_text), cells=cells, words=tab_words,
+            )
+            for i, (_lbl, tab_text, cells) in enumerate(variants)
+        )
+        selector = ""
+        if len(variants) > 1:
+            selector = (
+                '<div class="posbar" title="The recording cannot '
+                "say which string was played — same notes, "
+                'different neck positions">'
+                '<span class="poslabel">position</span>{}</div>'
+            ).format(buttons)
+        return selector + bodies
+
+    def staff_view(self):
+        """Grand staff, engraving-spaced and scrollable.
+
+        data-xs carries each column's exact x so the playhead sits on the
+        notehead sounding now; data-mids lets alt-clicks sound the whole
+        moment. The beat grid, when allin1 produced one, adds the time
+        signature, bar lines, and beamed rhythms.
+        """
+        built = staff_svg(
+            self.events, self.start, self.end,
+            beats=[
+                b for b in (self.structure.get("beat_times") or [])
+                if self.start - 1 <= b < self.end + 1
+            ],
+            downbeats=[
+                d for d in (self.structure.get("downbeat_times") or [])
+                if self.start <= d < self.end
+            ],
+        )
+        if not built:
+            return self.EMPTY
+        st_svg, st_times, st_xs, st_mids = built
+        return (
+            '<div class="tabwrap staffwrap" data-start="{t0}" '
+            'data-end="{t1}" data-times="{times}" data-xs="{xs}" '
+            'data-mids="{mids}">'
+            '<div class="tabinner">{staff}{words}'
+            '<div class="roll-line tab-line"></div></div>'
+            "</div>".format(
+                t0=self.start, t1=self.end,
+                times=",".join(str(round(t, 2)) for t in st_times),
+                xs=",".join(str(round(x, 1)) for x in st_xs),
+                mids=";".join(
+                    ",".join(str(m) for m in col) for col in st_mids
+                ),
+                staff=st_svg,
+                words=_words_row(
+                    self.lyr_segments, self.start, self.end,
+                    times=st_times, xs=st_xs,
+                ),
+            )
+        )
+
+    def chart_view(self):
+        """Chord chips plus the textbook-grip tab chart.
+
+        The playhead walks chord to chord; data-cells carries each grip's
+        string:midi pairs so an alt-click strums the whole chord.
+        """
+        chips = "".join(
+            '<span class="chip" data-start="{t0}" data-end="{t1}">'
+            "{sym}</span>".format(t0=t0, t1=t1, sym=_esc(sym))
+            for sym, t0, t1 in self.chord_events
+        )
+        chord_tab = chords_mod.render_chord_tab(
+            [
+                {"voicing": {"positions": self.canon[sym][1]}}
+                if self.canon.get(sym) and self.canon[sym][1]
+                else {"voicing": None}
+                for sym in self.symbols
+            ]
+        )
+        chord_times = ",".join(
+            str(round(t0, 2)) for _sym, t0, _t1 in self.chord_events
+        )
+        chord_cells = ";".join(
+            ",".join(
+                "{}:{}".format(
+                    p["string"],
+                    notes_mod.STANDARD_TUNING[p["string"]] + p["fret"],
+                )
+                for p in (self.canon.get(sym) and self.canon[sym][1] or [])
+            )
+            for sym, _t0, _t1 in self.chord_events
+        )
+        return (
+            '<div class="chips">{chips}</div>'
+            '<div class="tabwrap" data-start="{t0}" data-end="{t1}" '
+            'data-times="{times}" data-lead="2" data-colw="7" '
+            'data-cells="{cells}">'
+            '<div class="tabinner"><pre class="tab">{tab}</pre>'
+            '<div class="roll-line tab-line"></div></div></div>'.format(
+                chips=chips, t0=self.start, t1=self.end, times=chord_times,
+                cells=chord_cells, tab=_esc(chord_tab),
+            )
+        )
+
+    # -- assembly ------------------------------------------------------------
+
+    def render(self):
+        """The whole panel: summary line, view panes, lick command."""
+        panes = "".join(
+            '<div class="view{act}" data-view="{key}">{body}</div>'.format(
+                act=" active" if i == 0 else "", key=key,
+                body=getattr(self, method)(),
+            )
+            for i, (key, _label, method) in enumerate(self.VIEWS)
+        )
+        lick = ""
+        if self.norm_file:
+            lick = (
+                '<div class="lickrow"><code class="lick">music-stack '
+                "lick --input {} --start {} --end {}</code>"
+                '<button class="copy" type="button">copy</button>'
+                "</div>".format(
+                    _esc(self.norm_file), _clock(self.start),
+                    _clock(self.end),
+                )
+            )
+        hue = _SECTION_HUES.get(str(self.label or "").lower(), 210)
+        return (
+            '<details class="panel" data-start="{t0}" data-end="{t1}" '
+            'open><summary><span class="seclabel" style="--hue:{hue}">'
+            "{label}</span>"
+            '<span class="range">{c0}–{c1}</span>'
+            '<span class="prog-mini">{mini}</span></summary>'
+            '<div class="views">{panes}</div>'
+            "{lick}</details>".format(
+                t0=self.start, t1=self.end, hue=hue,
+                label=_esc(self.label or "all"),
+                c0=_clock(self.start), c1=_clock(self.end),
+                mini=_esc(" · ".join(self.symbols[:8])
+                          + (" …" if len(self.symbols) > 8 else "")),
+                panes=panes, lick=lick,
+            )
+        )
+
+    @classmethod
+    def switcher(cls):
+        """The one global view toggle, generated from the same registry."""
+        return '<div class="vtabs">{}</div>'.format(
+            "".join(
+                '<button type="button" class="vtab{act}" '
+                'data-view="{key}">{label}</button>'.format(
+                    act=" active" if i == 0 else "", key=key, label=label
+                )
+                for i, (key, label, _method) in enumerate(cls.VIEWS)
+            )
+        )
+
+
 # -- page ------------------------------------------------------------------
 
 
@@ -784,228 +1048,26 @@ def build(result, *, audio_path=None, chords=None):
     chords_html = ""
     viewbar_html = ""
     if chords:
-        from . import chords as chords_mod
-
         canon = {
             sym: (short, positions)
             for sym, short, positions in brief_mod.canonical_shapes(chords)
         }
         panels = []
         shown = set()
-        norm_file = (stages.get("normalize") or {}).get("file")
-        all_notes = (stages.get("chords") or {}).get("notes") or []
-        lyr_segments = (stages.get("lyrics") or {}).get("segments") or []
         for label, s_start, s_end, events in brief_mod.progression_events(
             chords, sections
         ):
-            symbols = [sym for sym, _t0, _t1 in events]
-            shown.update(symbols)
-            # Chips: one per chord as played — click to hear it, and the
-            # one currently sounding lights up during playback.
-            chips = "".join(
-                '<span class="chip" data-start="{t0}" data-end="{t1}">'
-                "{sym}</span>".format(t0=t0, t1=t1, sym=_esc(sym))
-                for sym, t0, t1 in events
+            panel = SectionPanel(
+                label, s_start, s_end, events,
+                all_notes=(stages.get("chords") or {}).get("notes") or [],
+                lyr_segments=(stages.get("lyrics") or {}).get("segments")
+                or [],
+                canon=canon,
+                structure=structure,
+                norm_file=(stages.get("normalize") or {}).get("file"),
             )
-            sec_events = [
-                e for e in all_notes
-                if float(e["start"]) < s_end and float(e["end"]) > s_start
-            ]
-
-            # View 1 — piano roll with the note names aligned beneath it.
-            roll = note_roll(sec_events, s_start, s_end)
-            roll_view = '<p class="note">No notes transcribed here.</p>'
-            if roll:
-                roll_view = (
-                    '<div class="rollwrap" data-start="{t0}" '
-                    'data-end="{t1}">{roll}'
-                    '<div class="roll-line"></div></div>{names}{words}'.format(
-                        t0=s_start, t1=s_end, roll=roll,
-                        names=_names_row(sec_events, s_start, s_end),
-                        words=_words_row(lyr_segments, s_start, s_end),
-                    )
-                )
-
-            # View 2 — every note as guitar tab. The audio cannot say which
-            # string was played, so offer the same notes in several neck
-            # positions and let the hand choose. data-times lets the script
-            # walk a playhead through the text, one monospace column each.
-            tab_view = '<p class="note">No notes transcribed here.</p>'
-            if sec_events:
-                ordered = sorted(
-                    sec_events, key=lambda e: (float(e["start"]), e["midi"])
-                )
-                tab_times = [round(float(e["start"]), 2) for e in ordered]
-                times = ",".join(str(t) for t in tab_times)
-                tab_words = _words_row(
-                    lyr_segments, s_start, s_end, times=tab_times
-                )
-                variants, seen_tabs = [], set()
-                for pos_label, seed in (
-                    ("low", None), ("5th", 5), ("9th", 9)
-                ):
-                    positioned = notes_mod.choose_positions(
-                        ordered, strings=(1, 2, 3, 4, 5, 6),
-                        prefer_fret=seed,
-                    )
-                    tab_text = notes_mod.render_tab(
-                        positioned, strings=(1, 2, 3, 4, 5, 6), width=3
-                    )
-                    if tab_text in seen_tabs:
-                        continue
-                    seen_tabs.add(tab_text)
-                    # string:midi per column, so a click on the fret digit
-                    # can sound that exact note.
-                    cells = ";".join(
-                        "{}:{}".format(p["string"], p["midi"])
-                        if p.get("string") else ""
-                        for p in positioned
-                    )
-                    variants.append((pos_label, tab_text, cells))
-                buttons = "".join(
-                    '<button type="button" class="postab{act}" '
-                    'data-pos="{i}">{lbl}</button>'.format(
-                        act=" active" if i == 0 else "", i=i, lbl=_esc(lbl)
-                    )
-                    for i, (lbl, _t, _c) in enumerate(variants)
-                )
-                bodies = "".join(
-                    '<div class="tabvar{act}" data-pos="{i}">'
-                    '<div class="tabwrap" data-start="{t0}" '
-                    'data-end="{t1}" data-times="{times}" data-lead="2" '
-                    'data-colw="4" data-cells="{cells}">'
-                    '<div class="tabinner">'
-                    '<pre class="tab">{tab}</pre>{words}'
-                    '<div class="roll-line tab-line"></div></div></div>'
-                    "</div>".format(
-                        act=" active" if i == 0 else "", i=i,
-                        t0=s_start, t1=s_end, times=times, tab=_esc(tab_text),
-                        cells=cells, words=tab_words,
-                    )
-                    for i, (_lbl, tab_text, cells) in enumerate(variants)
-                )
-                selector = ""
-                if len(variants) > 1:
-                    selector = (
-                        '<div class="posbar" title="The recording cannot '
-                        "say which string was played — same notes, "
-                        'different neck positions">'
-                        '<span class="poslabel">position</span>{}</div>'
-                    ).format(buttons)
-                tab_view = selector + bodies
-
-            # View 3 — grand-staff view, engraving-spaced and scrollable;
-            # data-xs carries each column's exact x so the playhead sits
-            # on the notehead sounding now. The beat grid, when allin1
-            # produced one, adds time signature, bar lines, and beams.
-            built = staff_svg(
-                sec_events, s_start, s_end,
-                beats=[
-                    b for b in (structure.get("beat_times") or [])
-                    if s_start - 1 <= b < s_end + 1
-                ],
-                downbeats=[
-                    d for d in (structure.get("downbeat_times") or [])
-                    if s_start <= d < s_end
-                ],
-            )
-            staff_view = '<p class="note">No notes transcribed here.</p>'
-            if built:
-                st_svg, st_times, st_xs, st_mids = built
-                staff_view = (
-                    '<div class="tabwrap staffwrap" data-start="{t0}" '
-                    'data-end="{t1}" data-times="{times}" data-xs="{xs}" '
-                    'data-mids="{mids}">'
-                    '<div class="tabinner">{staff}{words}'
-                    '<div class="roll-line tab-line"></div></div>'
-                    "</div>".format(
-                        t0=s_start, t1=s_end,
-                        times=",".join(
-                            str(round(t, 2)) for t in st_times
-                        ),
-                        xs=",".join(str(round(x, 1)) for x in st_xs),
-                        mids=";".join(
-                            ",".join(str(m) for m in col)
-                            for col in st_mids
-                        ),
-                        staff=st_svg,
-                        words=_words_row(
-                            lyr_segments, s_start, s_end,
-                            times=st_times, xs=st_xs,
-                        ),
-                    )
-                )
-
-            # View 4 — the chords: chips plus the textbook-grip tab chart,
-            # with the playhead walking chord to chord.
-            chord_tab = chords_mod.render_chord_tab(
-                [
-                    {"voicing": {"positions": canon[sym][1]}}
-                    if canon.get(sym) and canon[sym][1] else {"voicing": None}
-                    for sym in symbols
-                ]
-            )
-            chord_times = ",".join(
-                str(round(t0, 2)) for _sym, t0, _t1 in events
-            )
-            # All of a grip's string:midi pairs per column — a click on
-            # any of its frets strums the whole chord.
-            from .notes import STANDARD_TUNING
-
-            chord_cells = ";".join(
-                ",".join(
-                    "{}:{}".format(
-                        p["string"], STANDARD_TUNING[p["string"]] + p["fret"]
-                    )
-                    for p in (canon.get(sym) and canon[sym][1] or [])
-                )
-                for sym, _t0, _t1 in events
-            )
-            chart_view = (
-                '<div class="chips">{chips}</div>'
-                '<div class="tabwrap" data-start="{t0}" data-end="{t1}" '
-                'data-times="{times}" data-lead="2" data-colw="7" '
-                'data-cells="{cells}">'
-                '<div class="tabinner"><pre class="tab">{tab}</pre>'
-                '<div class="roll-line tab-line"></div></div></div>'.format(
-                    chips=chips, t0=s_start, t1=s_end, times=chord_times,
-                    cells=chord_cells, tab=_esc(chord_tab),
-                )
-            )
-
-            lick = ""
-            if norm_file:
-                lick = (
-                    '<div class="lickrow"><code class="lick">music-stack '
-                    "lick --input {} --start {} --end {}</code>"
-                    '<button class="copy" type="button">copy</button>'
-                    "</div>".format(
-                        _esc(norm_file), _clock(s_start), _clock(s_end),
-                    )
-                )
-            hue = _SECTION_HUES.get(str(label or "").lower(), 210)
-            panels.append(
-                '<details class="panel" data-start="{t0}" data-end="{t1}" '
-                'open><summary><span class="seclabel" style="--hue:{hue}">'
-                "{label}</span>"
-                '<span class="range">{c0}–{c1}</span>'
-                '<span class="prog-mini">{mini}</span></summary>'
-                '<div class="views">'
-                '<div class="view active" data-view="roll">{roll}</div>'
-                '<div class="view" data-view="gtab">{gtab}</div>'
-                '<div class="view" data-view="staff">{staff}</div>'
-                '<div class="view" data-view="chart">{chart}</div>'
-                "</div>"
-                "{lick}</details>".format(
-                    t0=s_start, t1=s_end, hue=hue,
-                    label=_esc(label or "all"),
-                    c0=_clock(s_start), c1=_clock(s_end),
-                    mini=_esc(" · ".join(symbols[:8])
-                              + (" …" if len(symbols) > 8 else "")),
-                    roll=roll_view, gtab=tab_view, staff=staff_view,
-                    chart=chart_view, lick=lick,
-                )
-            )
+            shown.update(panel.symbols)
+            panels.append(panel.render())
         prog_html = ""
         if panels:
             prog_html = '<div class="progression">{}</div>'.format(
@@ -1013,18 +1075,7 @@ def build(result, *, audio_path=None, chords=None):
             )
             # One switcher drives every section; it lives in the sticky
             # player bar so it is always in reach.
-            viewbar_html = (
-                '<div class="vtabs">'
-                '<button type="button" class="vtab active" '
-                'data-view="roll">Piano roll</button>'
-                '<button type="button" class="vtab" data-view="gtab">'
-                "Guitar tab</button>"
-                '<button type="button" class="vtab" data-view="staff">'
-                "Sheet music</button>"
-                '<button type="button" class="vtab" data-view="chart">'
-                "Chord chart</button>"
-                "</div>"
-            )
+            viewbar_html = SectionPanel.switcher()
         # One box per chord, the most frequently detected fingering — a
         # hand learning the song wants one shape, not every strum variant.
         cards = []

@@ -193,3 +193,15 @@ and the fixture together.
 3. Wire into `brief.analyze()` guarded by `.which()` so absence skips, not fails.
 4. Test the argv — that is the contract with the tool, and a flag change should
    fail a diff rather than a 1am run.
+
+## Adding a report view
+
+`report.SectionPanel` is the unit of extensibility: one method per view,
+registered in its `VIEWS` tuple (key, switcher label, method name). The
+global switcher, the panes, and the page script's toggling all derive from
+that registry — a fifth view is one method plus one row. Timed interactivity
+comes free by convention: give the view's wrapper `data-start`/`data-end`
+(plus `data-times`/`data-xs`/`data-cells` or `data-mids` for
+sequence-spaced charts) and the existing script drives its playhead,
+alt-click previews, ⌘-click looping, and lyric alignment. `_seq_x` /
+`seqPos` are the single time→x mappers — never a second copy.
