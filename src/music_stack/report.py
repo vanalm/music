@@ -511,6 +511,7 @@ def build(result, *, audio_path=None, chords=None):
     if chords is None:
         chords = (stages.get("chords") or {}).get("chords")
     chords_html = ""
+    viewbar_html = ""
     if chords:
         from . import chords as chords_mod
 
@@ -632,16 +633,6 @@ def build(result, *, audio_path=None, chords=None):
                 '<span class="range">{c0}–{c1}</span>'
                 '<span class="prog-mini">{mini}</span></summary>'
                 '<div class="views">'
-                '<div class="vtabs">'
-                '<button type="button" class="vtab active" '
-                'data-view="roll">Piano roll</button>'
-                '<button type="button" class="vtab" data-view="gtab">'
-                "Guitar tab</button>"
-                '<button type="button" class="vtab" data-view="staff">'
-                "Sheet music</button>"
-                '<button type="button" class="vtab" data-view="chart">'
-                "Chord chart</button>"
-                "</div>"
                 '<div class="view active" data-view="roll">{roll}</div>'
                 '<div class="view" data-view="gtab">{gtab}</div>'
                 '<div class="view" data-view="staff">{staff}</div>'
@@ -661,6 +652,20 @@ def build(result, *, audio_path=None, chords=None):
         if panels:
             prog_html = '<div class="progression">{}</div>'.format(
                 "".join(panels)
+            )
+            # One switcher drives every section; it lives in the sticky
+            # player bar so it is always in reach.
+            viewbar_html = (
+                '<div class="vtabs">'
+                '<button type="button" class="vtab active" '
+                'data-view="roll">Piano roll</button>'
+                '<button type="button" class="vtab" data-view="gtab">'
+                "Guitar tab</button>"
+                '<button type="button" class="vtab" data-view="staff">'
+                "Sheet music</button>"
+                '<button type="button" class="vtab" data-view="chart">'
+                "Chord chart</button>"
+                "</div>"
             )
         # One box per chord, the most frequently detected fingering — a
         # hand learning the song wants one shape, not every strum variant.
@@ -707,6 +712,7 @@ def build(result, *, audio_path=None, chords=None):
         facts=facts_html,
         audio=audio_html,
         timeline=timeline_html,
+        viewbar=viewbar_html,
         arrangement=_esc(structure.get("arrangement") or ""),
         missing=missing_html,
         lyrics=lyrics_html,
@@ -856,9 +862,19 @@ _TEMPLATE = """<!DOCTYPE html>
     background: #e11d48; display: none; pointer-events: none;
   }}
 
+  .tophead {{ display: flex; align-items: center; gap: 1rem;
+    justify-content: space-between; }}
+  .infobtn {{ width: 1.7rem; height: 1.7rem; border-radius: 50%;
+    border: 1px solid var(--line); background: var(--card);
+    color: var(--muted); font: italic 700 .9rem Georgia, serif;
+    cursor: pointer; flex: none; }}
+  .infobtn:hover {{ border-color: var(--accent); color: var(--accent); }}
+  .infocard {{ margin: .4rem 0 1rem; font-size: .85rem; }}
+  .infocard p {{ margin: .45rem 0; }}
   .views {{ margin-top: .7rem; }}
   .vtabs {{ display: inline-flex; gap: 2px; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 9px; padding: 2px; }}
+    border: 1px solid var(--line); border-radius: 9px; padding: 2px;
+    margin-top: .7rem; }}
   .vtab {{ border: 0; background: transparent; padding: .28rem .75rem;
     border-radius: 7px; font: inherit; font-size: .78rem;
     color: var(--muted); cursor: pointer; }}
@@ -947,11 +963,32 @@ _TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 <main>
+<header class="tophead">
 <h1>{title}</h1>
+<button id="infobtn" class="infobtn" type="button"
+  aria-label="About this page">i</button>
+</header>
 <div class="facts">{facts}</div>
+<div id="infocard" class="card-block infocard" hidden>
+<p><b>How this was made</b> — analyzed on your machine by
+<code>music-stack</code>: ffmpeg (audio prep) · Demucs htdemucs (stem
+separation) · allin1 + madmom (tempo &amp; sections) · mlx-whisper
+(lyrics) · basic-pitch (note transcription). The page itself is
+dependency-free HTML/SVG with the audio embedded — mail it to anyone.</p>
+<p><b>Using it</b> — <kbd>space</kbd> play/pause · <kbd>←</kbd>
+<kbd>→</kbd> scrub · click the timeline, a chord chip, a note name, or
+anywhere in a roll or staff to jump there · the toggle switches every
+section between Piano roll, Guitar tab, Sheet music, and Chord chart ·
+each section's <code>music-stack lick</code> command re-transcribes just
+that span for note-perfect tab, scale, and sheet music.</p>
+<p><b>Accuracy</b> — transcription is machine listening on a full mix:
+trust the progression and timing, and verify oddball chords or fast licks
+with <code>lick</code> on a tight time window.</p>
+</div>
 <div class="playerbar">
 {audio}
 {timeline}
+{viewbar}
 <div class="keys"><kbd>space</kbd> play / pause &nbsp; <kbd>←</kbd>
 <kbd>→</kbd> scrub 1s &nbsp; click a section, chord, or note to jump
 there</div>
@@ -970,6 +1007,27 @@ there</div>
     var player = document.getElementById("player");
     var playhead = document.getElementById("playhead");
     var timeline = document.getElementById("timeline");
+    var lastPanel = null;
+    var vbuttons = document.querySelectorAll(".vtabs .vtab");
+    vbuttons.forEach(function (btn) {{
+      btn.addEventListener("click", function () {{
+        vbuttons.forEach(function (b) {{
+          b.classList.toggle("active", b === btn);
+        }});
+        document.querySelectorAll(".view").forEach(function (pane) {{
+          pane.classList.toggle(
+            "active", pane.dataset.view === btn.dataset.view
+          );
+        }});
+      }});
+    }});
+    var infoBtn = document.getElementById("infobtn");
+    var infoCard = document.getElementById("infocard");
+    if (infoBtn && infoCard) {{
+      infoBtn.addEventListener("click", function () {{
+        infoCard.hidden = !infoCard.hidden;
+      }});
+    }}
     if (!player) return;
     document.querySelectorAll(
       ".seg[data-start], .chip[data-start], .ncol[data-start]"
@@ -1004,20 +1062,6 @@ there</div>
         colw: parseFloat(w.dataset.colw || 4)
       }});
     }});
-    document.querySelectorAll(".views").forEach(function (views) {{
-      views.querySelectorAll(".vtab").forEach(function (btn) {{
-        btn.addEventListener("click", function () {{
-          views.querySelectorAll(".vtab").forEach(function (b) {{
-            b.classList.toggle("active", b === btn);
-          }});
-          views.querySelectorAll(".view").forEach(function (pane) {{
-            pane.classList.toggle(
-              "active", pane.dataset.view === btn.dataset.view
-            );
-          }});
-        }});
-      }});
-    }});
     var rolls = document.querySelectorAll(".rollwrap[data-start]");
     rolls.forEach(function (wrap) {{
       wrap.addEventListener("click", function (e) {{
@@ -1040,6 +1084,14 @@ there</div>
                  t < parseFloat(el.dataset.end);
         el.classList.toggle("now", on);
       }});
+      // The line flows on into the next section: follow it down the page.
+      if (!player.paused) {{
+        var nowPanel = document.querySelector(".panel.now");
+        if (nowPanel && nowPanel !== lastPanel) {{
+          lastPanel = nowPanel;
+          nowPanel.scrollIntoView({{behavior: "smooth", block: "nearest"}});
+        }}
+      }}
       rolls.forEach(function (wrap) {{
         var t0 = parseFloat(wrap.dataset.start);
         var t1 = parseFloat(wrap.dataset.end);

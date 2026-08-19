@@ -330,6 +330,14 @@ class NoteRollTests(unittest.TestCase):
             self.assertIn(label, html)
         self.assertIn('data-view="gtab"', html)
         self.assertIn("staffwrap", html)
+        # One global switcher in the player bar, not one per section.
+        self.assertEqual(html.count('class="vtabs"'), 1)
+
+    def test_info_card_names_the_tools(self):
+        html = report.build(payload())
+        self.assertIn('id="infobtn"', html)
+        for tool in ("ffmpeg", "Demucs", "allin1", "basic-pitch"):
+            self.assertIn(tool, html)
 
     def test_staff_is_a_grand_staff_with_bass_clef(self):
         events = [
