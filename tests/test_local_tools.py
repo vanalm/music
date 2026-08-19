@@ -99,6 +99,35 @@ class CommandBuildingTests(unittest.TestCase):
         argv = local_tools.lyrics_command("v.wav", "out/")
         self.assertNotIn("--language", argv)
 
+    def test_mlx_whisper_command_uses_dashed_flags_and_hub_repo(self):
+        # mlx_whisper rejects the openai-whisper underscore flags, and its
+        # --model resolves against the Hub, where "small" is not a repo.
+        argv = local_tools.lyrics_command(
+            "v.wav", "out/", model="small", language="en",
+            binary="mlx_whisper", kind="mlx",
+        )
+        self.assertEqual(
+            argv,
+            [
+                "mlx_whisper", "v.wav",
+                "--model", "mlx-community/whisper-small-mlx",
+                "--output-dir", "out/", "--output-format", "all",
+                "--language", "en",
+            ],
+        )
+
+    def test_mlx_whisper_passes_explicit_repo_and_local_dir_through(self):
+        argv = local_tools.lyrics_command(
+            "v.wav", "out/", model="mlx-community/whisper-turbo",
+            binary="mlx_whisper", kind="mlx",
+        )
+        self.assertIn("mlx-community/whisper-turbo", argv)
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = local_tools.lyrics_command(
+                "v.wav", "out/", model=tmp, binary="mlx_whisper", kind="mlx",
+            )
+            self.assertIn(tmp, argv)
+
 
 class DryRunTests(unittest.TestCase):
     """--dry-run must work with the tool absent; that is its whole purpose."""
@@ -117,7 +146,11 @@ class DryRunTests(unittest.TestCase):
     def test_lyrics_dry_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = local_tools.lyrics(wav(tmp), tmp, dry_run=True)
-            self.assertIn("--output_format", result["command"])
+            # Whichever variant this machine has, some output flag is present.
+            self.assertTrue(
+                {"--output_format", "--output-format", "-otxt"}
+                & set(result["command"])
+            )
 
     def test_dry_run_still_validates_the_input_exists(self):
         with self.assertRaises(AudioError):

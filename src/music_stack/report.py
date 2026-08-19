@@ -10,16 +10,22 @@ Constraints, deliberately:
 * **One file, zero dependencies.** Generated with the standard library — no
   frameworks, no CDN, no network requests. It works on an aeroplane and never
   breaks because a host moved.
-* **Audio stays on disk.** The player references the project's WAV by
-  *relative path*, so the page plays from inside its project folder and the
-  HTML itself stays small enough to share (minus the audio).
+* **The audio travels with the page when it can.** The player embeds a
+  compact AAC preview as a data URI when ffmpeg is present and the result is
+  small enough, so the file survives being mailed to a bandmate. Otherwise it
+  degrades to a *relative path* into the project folder — and says so.
 * **Sparse analysis → sparse page, never a broken one.** Each section renders
   from whatever the brief holds; a missing stage states how to get it.
 """
 
+import base64
 import html as _html
 import os
+import subprocess
+import tempfile
 from pathlib import Path
+
+from . import audio as audio_mod
 
 #: Section label -> hue, so the timeline is scannable at a glance.
 _SECTION_HUES = {
@@ -30,6 +36,51 @@ _SECTION_HUES = {
 
 def _esc(text):
     return _html.escape(str(text if text is not None else ""), quote=True)
+
+
+#: Reference listening, not mixing — keeps a 4-minute song near 3 MB.
+PREVIEW_BITRATE = "96k"
+
+#: Cap on the embedded preview before base64 inflation (~4/3 in the page).
+MAX_EMBED_BYTES = 12 * 1024 * 1024
+
+
+def preview_audio(path, *, max_bytes=MAX_EMBED_BYTES):
+    """Return ``(data_uri, note)`` for *path*, or ``(None, reason)``.
+
+    Transcodes to AAC first: embedding a 24-bit WAV would produce a page
+    hundreds of megabytes wide once base64 inflates it by a third.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None, "audio file not found"
+    ffmpeg = audio_mod.which("ffmpeg")
+    if not ffmpeg:
+        return None, "ffmpeg not installed, so no embedded preview"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "preview.m4a"
+        proc = subprocess.run(
+            [
+                ffmpeg, "-hide_banner", "-loglevel", "error",
+                "-nostdin", "-y", "-i", str(path), "-vn",
+                "-c:a", "aac", "-b:a", PREVIEW_BITRATE, "-ar", "44100",
+                str(out),
+            ],
+            capture_output=True,
+        )
+        if proc.returncode != 0 or not out.exists():
+            return None, "ffmpeg could not make a preview"
+        raw = out.read_bytes()
+
+    if len(raw) > max_bytes:
+        return None, "preview is {:.0f} MB, too large to embed".format(
+            len(raw) / 1024 / 1024
+        )
+    return (
+        "data:audio/mp4;base64," + base64.b64encode(raw).decode("ascii"),
+        "embedded preview ({:.1f} MB)".format(len(raw) / 1024 / 1024),
+    )
 
 
 def _clock(seconds):
@@ -129,21 +180,31 @@ def build(result, *, audio_path=None, chords=None):
 
     # -- audio ------------------------------------------------------------
     if audio_path:
-        # Relative name: report.html sits in the project dir, the normalized
-        # WAV one level down. If the exact relative path cannot be derived,
-        # the bare filename is still the best guess -- browsers resolve it
-        # against the page, and a wrong guess degrades to a silent player,
-        # not a broken page.
-        audio_src = os.path.basename(str(audio_path))
-        project = result.get("project")
-        if project:
-            try:
-                audio_src = str(Path(audio_path).relative_to(project))
-            except ValueError:
-                pass
-        audio_html = (
-            '<audio id="player" controls preload="metadata" src="{}"></audio>'
-        ).format(_esc(audio_src))
+        data_uri, note = preview_audio(audio_path)
+        if data_uri:
+            audio_html = (
+                '<audio id="player" controls preload="metadata" '
+                'src="{}"></audio>'.format(data_uri)
+            )
+        else:
+            # Fall back to a relative path: report.html sits in the project
+            # dir, the normalized WAV one level down. If the exact relative
+            # path cannot be derived, the bare filename is still the best
+            # guess -- browsers resolve it against the page, and a wrong
+            # guess degrades to a silent player, not a broken page.
+            audio_src = os.path.basename(str(audio_path))
+            project = result.get("project")
+            if project:
+                try:
+                    audio_src = str(Path(audio_path).relative_to(project))
+                except ValueError:
+                    pass
+            audio_html = (
+                '<audio id="player" controls preload="metadata" src="{src}">'
+                '</audio>'
+                '<p class="note">Audio is not embedded ({why}); playback '
+                'needs this file to stay next to its project folder.</p>'
+            ).format(src=_esc(audio_src), why=_esc(note))
     else:
         audio_html = '<p class="note">No audio available for playback.</p>'
 

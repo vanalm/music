@@ -117,6 +117,11 @@ def find_whisper():
             return found, binary, kind
     return None
 
+
+#: mlx_whisper's --model wants a Hub repo or local directory, not a bare
+#: size name; the mlx-community conversions follow this naming scheme.
+MLX_WHISPER_REPO = "mlx-community/whisper-{}-mlx"
+
 #: Demucs writes to <out>/<model>/<input-stem>/<source>.wav
 DEFAULT_DEMUCS_MODEL = "htdemucs"
 
@@ -148,7 +153,18 @@ def _check_input(path):
 
 def status():
     """Report which local tools are installed. Used by `doctor`."""
-    return [(t.key, t.binary, t.which(), t.install) for t in TOOLS.values()]
+    rows = []
+    for t in TOOLS.values():
+        if t.key == "whisper":
+            # Report whichever Whisper packaging analyze would actually use,
+            # not just the openai-whisper binary.
+            found = find_whisper()
+            if found:
+                path, binary, _kind = found
+                rows.append((t.key, binary, path, t.install))
+                continue
+        rows.append((t.key, t.binary, t.which(), t.install))
+    return rows
 
 
 # -- stems ----------------------------------------------------------------
@@ -289,7 +305,18 @@ def lyrics_command(path, out_dir, *, model="small", language=None,
             argv += ["-l", language]
         return argv
 
-    # mlx_whisper and openai-whisper share the same flag surface.
+    if kind == "mlx":
+        # mlx_whisper takes dashed flags, and its --model is a Hub repo or
+        # local directory rather than a size name.
+        if model and "/" not in model and not os.path.exists(model):
+            model = MLX_WHISPER_REPO.format(model)
+        argv = [binary, path, "--model", model,
+                "--output-dir", out_dir, "--output-format", "all"]
+        if language:
+            argv += ["--language", language]
+        return argv
+
+    # openai-whisper: underscore flags, bare size names.
     argv = [binary, path, "--model", model,
             "--output_dir", out_dir, "--output_format", "all"]
     if language:

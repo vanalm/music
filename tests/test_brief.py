@@ -191,11 +191,13 @@ class WhisperVariantTests(unittest.TestCase):
         self.assertEqual(argv[0], "whisper")
 
     def test_mlx_variant_argv(self):
+        # mlx_whisper rejects openai-whisper's underscore flags.
         argv = local_tools.lyrics_command(
             "v.wav", "out", binary="mlx_whisper", kind="mlx"
         )
         self.assertEqual(argv[0], "mlx_whisper")
-        self.assertIn("--output_dir", argv)
+        self.assertIn("--output-dir", argv)
+        self.assertNotIn("--output_dir", argv)
 
     def test_cpp_variant_uses_its_own_flags(self):
         argv = local_tools.lyrics_command(

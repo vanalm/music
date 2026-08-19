@@ -1,8 +1,29 @@
 """HTML report tests — structure, escaping, interactivity hooks, degradation."""
 
+import os
+import subprocess
+import tempfile
 import unittest
+from unittest import mock
 
-from music_stack import chords, report
+from music_stack import audio, chords, report
+
+HAS_FFMPEG = bool(audio.which("ffmpeg"))
+requires_ffmpeg = unittest.skipUnless(
+    HAS_FFMPEG, "ffmpeg not installed; run ./scripts/bootstrap-macos.sh"
+)
+
+
+def tone(path, seconds=1):
+    subprocess.run(
+        [
+            audio.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration={}".format(seconds),
+            path,
+        ],
+        check=True,
+    )
+    return path
 
 
 def payload(**overrides):
@@ -82,6 +103,58 @@ class DegradationTests(unittest.TestCase):
         html = report.build(payload(), audio_path="/nope/demo.wav")
         # Falls back to a relative filename source rather than nothing.
         self.assertIn('src="demo.wav"', html)
+
+
+class PreviewEmbedTests(unittest.TestCase):
+    """The page embeds an AAC preview when it can, and says so when it can't."""
+
+    def test_missing_file_reports_why(self):
+        data_uri, note = report.preview_audio("/nope/demo.wav")
+        self.assertIsNone(data_uri)
+        self.assertIn("not found", note)
+
+    def test_no_ffmpeg_reports_why(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "demo.wav")
+            open(path, "wb").close()
+            with mock.patch.object(report.audio_mod, "which", return_value=None):
+                data_uri, note = report.preview_audio(path)
+        self.assertIsNone(data_uri)
+        self.assertIn("ffmpeg", note)
+
+    @requires_ffmpeg
+    def test_embeds_small_audio_as_data_uri(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = tone(os.path.join(tmp, "demo.wav"))
+            data_uri, note = report.preview_audio(path)
+        self.assertTrue(data_uri and data_uri.startswith("data:audio/mp4;base64,"))
+        self.assertIn("embedded", note)
+
+    @requires_ffmpeg
+    def test_oversize_preview_degrades_and_says_so(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = tone(os.path.join(tmp, "demo.wav"))
+            data_uri, note = report.preview_audio(path, max_bytes=10)
+            self.assertIsNone(data_uri)
+            self.assertIn("too large", note)
+
+            data = payload()
+            data["project"] = tmp
+            with mock.patch.object(
+                report, "preview_audio",
+                return_value=(None, "preview is 99 MB, too large to embed"),
+            ):
+                html = report.build(data, audio_path=path)
+        self.assertIn('src="demo.wav"', html)
+        self.assertIn("not embedded", html)
+
+    @requires_ffmpeg
+    def test_build_prefers_the_embedded_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = tone(os.path.join(tmp, "demo.wav"))
+            html = report.build(payload(), audio_path=path)
+        self.assertIn("data:audio/mp4;base64,", html)
+        self.assertNotIn("not embedded", html)
 
 
 class EscapingTests(unittest.TestCase):
