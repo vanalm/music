@@ -274,6 +274,35 @@ def _names_row(events, start, end):
     return '<div class="names namesline">{}</div>'.format("".join(spans))
 
 
+def _words_row(segments, start, end):
+    """The lyric, placed at its moment beneath the roll.
+
+    Each Whisper segment sits at its horizontal time fraction like the
+    note names above it; the one being sung gets grown and accented by
+    the page script, so eyes track words, notes, and names in one column.
+    """
+    span = max(float(end) - float(start), 0.001)
+    inside = [
+        s for s in segments or []
+        if float(s["start"]) < end and float(s["end"]) > start
+    ]
+    if not inside:
+        return ""
+    spans = []
+    for seg in inside:
+        left = max(
+            0.0, min((float(seg["start"]) - start) / span * 100.0, 100.0)
+        )
+        spans.append(
+            '<span class="word" style="left:{left:.2f}%" data-start="{s}" '
+            'data-end="{e}">{text}</span>'.format(
+                left=left, s=seg["start"], e=seg["end"],
+                text=_esc(seg["text"]),
+            )
+        )
+    return '<div class="words">{}</div>'.format("".join(spans))
+
+
 #: Pitch class -> (letter index C=0..B=6, accidental) using flat spellings,
 #: matching FLAT note names.
 _PC_DIATONIC = {
@@ -488,11 +517,24 @@ def build(result, *, audio_path=None, chords=None):
             else "transcribed from the full mix — expect errors where "
                  "instruments mask the vocal"
         )
+        segments = lyrics.get("segments") or []
+        if segments:
+            lines = "".join(
+                '<p class="lline" data-start="{s}" data-end="{e}">'
+                '<span class="lt">{clock}</span>'
+                '<span class="ltext">{text}</span></p>'.format(
+                    s=seg["start"], e=seg["end"],
+                    clock=_clock(seg["start"]), text=_esc(seg["text"]),
+                )
+                for seg in segments
+            )
+            body = '<div class="card-block lyriclines">{}</div>'.format(lines)
+        else:
+            body = '<div class="card-block"><pre class="lyrics">{}</pre>' \
+                   "</div>".format(_esc(lyrics["text"]))
         lyrics_html = (
             "<h2>Lyrics as sung</h2>"
-            '<p class="note">{}</p>'
-            '<div class="card-block"><pre class="lyrics">{}</pre>'
-            "</div>".format(_esc(provenance), _esc(lyrics["text"]))
+            '<p class="note">{}</p>{}'.format(_esc(provenance), body)
         )
 
     # -- stems ------------------------------------------------------------
@@ -523,6 +565,7 @@ def build(result, *, audio_path=None, chords=None):
         shown = set()
         norm_file = (stages.get("normalize") or {}).get("file")
         all_notes = (stages.get("chords") or {}).get("notes") or []
+        lyr_segments = (stages.get("lyrics") or {}).get("segments") or []
         for label, s_start, s_end, events in brief_mod.progression_events(
             chords, sections
         ):
@@ -547,9 +590,10 @@ def build(result, *, audio_path=None, chords=None):
                 roll_view = (
                     '<div class="rollwrap" data-start="{t0}" '
                     'data-end="{t1}">{roll}'
-                    '<div class="roll-line"></div></div>{names}'.format(
+                    '<div class="roll-line"></div></div>{names}{words}'.format(
                         t0=s_start, t1=s_end, roll=roll,
                         names=_names_row(sec_events, s_start, s_end),
+                        words=_words_row(lyr_segments, s_start, s_end),
                     )
                 )
 
@@ -898,6 +942,23 @@ _TEMPLATE = """<!DOCTYPE html>
   .ncol.now {{ font-size: .72rem; opacity: 1; background: var(--accent);
     color: #fff; z-index: 3; }}
 
+  .karaoke {{ margin-top: .55rem; text-align: center; font-size: .95rem;
+    font-weight: 600; min-height: 1.35rem; }}
+  .words {{ position: relative; height: 1.35rem; margin-top: .1rem; }}
+  .word {{ position: absolute; top: 0; font-size: .66rem;
+    color: var(--muted); white-space: nowrap; max-width: 42%;
+    overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+    transition: font-size .12s; }}
+  .word:hover {{ color: var(--accent); z-index: 4; }}
+  .word.now {{ color: var(--accent); font-weight: 700;
+    font-size: .78rem; z-index: 3; background: var(--card);
+    max-width: 70%; }}
+  .lyriclines .lline {{ margin: .3rem 0; cursor: pointer; }}
+  .lline .lt {{ color: var(--muted); font-size: .7rem; margin-right: .6rem;
+    font-variant-numeric: tabular-nums; }}
+  .lline:hover .ltext {{ color: var(--accent); }}
+  .lline.now .ltext {{ color: var(--accent); font-weight: 650; }}
+
   .tabwrap {{ overflow-x: auto; border: 1px solid var(--line);
     border-radius: 9px; background: var(--panel); }}
   .tabinner {{ position: relative; display: inline-block;
@@ -988,10 +1049,11 @@ with <code>lick</code> on a tight time window.</p>
 <div class="playerbar">
 {audio}
 {timeline}
+<div class="karaoke" id="karaoke" hidden></div>
 {viewbar}
 <div class="keys"><kbd>space</kbd> play / pause &nbsp; <kbd>←</kbd>
-<kbd>→</kbd> scrub 1s &nbsp; click a section, chord, or note to jump
-there</div>
+<kbd>→</kbd> scrub 1s &nbsp; click a section, chord, note, or lyric to
+jump there</div>
 </div>
 <div class="arrangement">{arrangement}</div>
 {missing}
@@ -1030,7 +1092,8 @@ there</div>
     }}
     if (!player) return;
     document.querySelectorAll(
-      ".seg[data-start], .chip[data-start], .ncol[data-start]"
+      ".seg[data-start], .chip[data-start], .ncol[data-start], " +
+      ".word[data-start], .lline[data-start]"
     ).forEach(function (el) {{
       el.addEventListener("click", function () {{
         player.currentTime = parseFloat(el.dataset.start);
@@ -1038,8 +1101,11 @@ there</div>
       }});
     }});
     var timed = document.querySelectorAll(
-      ".panel[data-start], .chip[data-start]"
+      ".panel[data-start], .chip[data-start], .word[data-start], " +
+      ".lline[data-start]"
     );
+    var karaoke = document.getElementById("karaoke");
+    var llines = document.querySelectorAll(".lline[data-start]");
     var nameslines = [];
     document.querySelectorAll(".namesline").forEach(function (row) {{
       var panel = row.closest(".panel");
@@ -1084,6 +1150,16 @@ there</div>
                  t < parseFloat(el.dataset.end);
         el.classList.toggle("now", on);
       }});
+      if (karaoke) {{
+        var sung = null;
+        llines.forEach(function (l) {{
+          if (t >= parseFloat(l.dataset.start) &&
+              t < parseFloat(l.dataset.end)) sung = l;
+        }});
+        var text = sung ? sung.querySelector(".ltext").textContent : "";
+        if (karaoke.textContent !== text) karaoke.textContent = text;
+        karaoke.hidden = !text;
+      }}
       // The line flows on into the next section: follow it down the page.
       if (!player.paused) {{
         var nowPanel = document.querySelector(".panel.now");

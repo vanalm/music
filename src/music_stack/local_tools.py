@@ -25,6 +25,7 @@ command before it runs beats debugging it afterwards.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -363,6 +364,67 @@ def lyrics(path, out_dir, *, model="small", language=None, dry_run=False):
             "Whisper finished but wrote nothing to {}.".format(out_dir)
         )
     return {"command": argv, "variant": kind, "files": [str(p) for p in produced]}
+
+
+_SRT_TIME = re.compile(
+    r"(\d+):(\d\d):(\d\d)[,.](\d+)\s*-->\s*(\d+):(\d\d):(\d\d)[,.](\d+)"
+)
+
+
+def read_transcript_segments(paths):
+    """Timed lyric segments ``[{start, end, text}…]`` from Whisper output.
+
+    Prefers the JSON (exact floats, same shape across whisper packagings);
+    falls back to parsing the SRT. Returns ``[]`` when neither carries
+    timing — the caller degrades to the plain transcript.
+    """
+    paths = [Path(p) for p in paths]
+    for p in paths:
+        if p.suffix != ".json" or not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        segments = []
+        for s in data.get("segments") or []:
+            text = (s.get("text") or "").strip()
+            try:
+                start, end = float(s["start"]), float(s["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if text:
+                segments.append(
+                    {"start": round(start, 2), "end": round(end, 2),
+                     "text": text}
+                )
+        if segments:
+            return segments
+    for p in paths:
+        if p.suffix != ".srt" or not p.exists():
+            continue
+        segments = []
+        block_time = None
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = _SRT_TIME.search(line)
+            if match:
+                h1, m1, s1, ms1, h2, m2, s2, ms2 = match.groups()
+                block_time = (
+                    int(h1) * 3600 + int(m1) * 60 + int(s1)
+                    + int(ms1.ljust(3, "0")[:3]) / 1000.0,
+                    int(h2) * 3600 + int(m2) * 60 + int(s2)
+                    + int(ms2.ljust(3, "0")[:3]) / 1000.0,
+                )
+            elif block_time and line.strip() and not line.strip().isdigit():
+                segments.append(
+                    {"start": round(block_time[0], 2),
+                     "end": round(block_time[1], 2),
+                     "text": line.strip()}
+                )
+                block_time = None
+        if segments:
+            return segments
+    return []
 
 
 def read_transcript(paths):

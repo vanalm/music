@@ -213,3 +213,35 @@ class StructureSummaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TranscriptSegmentTests(unittest.TestCase):
+    """Timed lyric segments come from the JSON, or the SRT as fallback."""
+
+    def test_json_segments_win(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "v.json")
+            with open(path, "w") as fh:
+                json.dump({"text": "hi", "segments": [
+                    {"start": 1.234, "end": 3.5, "text": " hi there "},
+                    {"start": 4.0, "end": 5.0, "text": ""},
+                ]}, fh)
+            segs = local_tools.read_transcript_segments([path])
+        self.assertEqual(
+            segs, [{"start": 1.23, "end": 3.5, "text": "hi there"}]
+        )
+
+    def test_srt_fallback(self):
+        srt = ("1\n00:00:01,500 --> 00:00:04,200\nhello world\n\n"
+               "2\n00:01:00,000 --> 00:01:02,000\nsecond line\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "v.srt")
+            with open(path, "w") as fh:
+                fh.write(srt)
+            segs = local_tools.read_transcript_segments([path])
+        self.assertEqual(segs[0], {"start": 1.5, "end": 4.2,
+                                   "text": "hello world"})
+        self.assertEqual(segs[1]["start"], 60.0)
+
+    def test_no_timing_anywhere_is_empty(self):
+        self.assertEqual(local_tools.read_transcript_segments([]), [])

@@ -333,6 +333,28 @@ class NoteRollTests(unittest.TestCase):
         # One global switcher in the player bar, not one per section.
         self.assertEqual(html.count('class="vtabs"'), 1)
 
+    def test_timed_lyrics_render_as_seekable_lines_with_karaoke(self):
+        data = payload()
+        data["stages"]["lyrics"]["segments"] = [
+            {"start": 7.5, "end": 11.0, "text": "walking down"},
+            {"start": 12.0, "end": 15.0, "text": "to the water line"},
+        ]
+        html = report.build(data)
+        self.assertIn('class="lline" data-start="7.5"', html)
+        self.assertIn("walking down", html)
+        self.assertIn('id="karaoke"', html)
+
+    def test_untimed_lyrics_still_render_as_plain_text(self):
+        html = report.build(payload())
+        self.assertIn('<pre class="lyrics">', html)
+
+    def test_words_align_under_the_roll(self):
+        segs = [{"start": 10.0, "end": 14.0, "text": "walking down"}]
+        html = report._words_row(segs, 8.0, 40.0)
+        self.assertIn('style="left:6.25%"', html)
+        self.assertIn('class="word"', html)
+        self.assertEqual(report._words_row(segs, 20.0, 30.0), "")
+
     def test_info_card_names_the_tools(self):
         html = report.build(payload())
         self.assertIn('id="infobtn"', html)

@@ -115,6 +115,9 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
         stage["from_isolated_vocal"] = bool(vocal_stem)
         if not dry_run:
             stage["text"] = local_tools.read_transcript(stage.get("files", []))
+            stage["segments"] = local_tools.read_transcript_segments(
+                stage.get("files", [])
+            )
         result["stages"]["lyrics"] = stage
 
     # -- 6. chords: what to actually play ---------------------------------

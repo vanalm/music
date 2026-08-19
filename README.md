@@ -72,11 +72,16 @@ projects/kaimana-nights/
 └── report.html     ← the thing to LOOK at — double-click it
 ```
 
-`report.html` is the visual version: an audio player whose timeline is the
-song's actual sections (click the chorus to jump there), the structure table,
-lyrics, chord boxes, and stem links. One self-contained file — no server, no
-install — so you can mail it to a bandmate. Regenerate any time with
-`music-stack report <slug>`.
+`report.html` is the interactive version — a play-along page, not a printout.
+An audio player whose timeline is the song's actual sections, and under it
+one panel per section that a single switcher flips between **piano roll**
+(every transcribed note, names aligned beneath), **guitar tab**, **sheet
+music** (grand staff), and the **chord chart** with textbook grips. A
+playhead runs through whichever view is up and flows section to section;
+lyrics are time-synced (karaoke line in the player, clickable lines below);
+space bar and arrow keys drive playback; everything clickable seeks. One
+self-contained file — audio embedded — so you can mail it to a bandmate.
+Regenerate any time with `music-stack report <slug>`.
 
 Paste `brief.md` into a chat and you are working on the song, not the tooling.
 
@@ -222,9 +227,9 @@ disk.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-275 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
+281 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 283.
+runs 289.
 
 The hosted-service tests are fully mocked — they verify this code's logic, not
 vendor behaviour. **No live API call has ever been made from this repository.**

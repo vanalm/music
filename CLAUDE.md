@@ -22,10 +22,14 @@ music-stack analyze --input ~/Downloads/vm0043.m4a
 Scaffolds a project, preserves the original, transcodes a lossless working
 copy, runs every analysis stage the machine supports, silently skips the rest,
 and writes `projects/<slug>/brief.md` — a one-page songwriting brief with
-tempo, arrangement, missing sections, lyrics, and derived questions — plus
-`report.html`, a self-contained visual version with a section-marked audio
-player. The report embeds a compact AAC preview as a data URI when ffmpeg is
-present and small enough; otherwise it degrades to a relative src and says so.
+tempo, arrangement, missing sections, chords as played, lyrics, and derived
+questions — plus `report.html`, a self-contained interactive play-along page:
+per-section panels a single switcher flips between piano roll (notes with
+names aligned beneath), guitar tab, grand-staff sheet music, and chord chart;
+a playhead runs through every view and follows into the next section;
+time-synced lyrics (karaoke line + clickable lines); keyboard transport.
+The report embeds a compact AAC preview as a data URI when ffmpeg is present
+and small enough; otherwise it degrades to a relative src and says so.
 
 A machine with only ffmpeg still produces a brief. Each optional tool installed
 adds a section.
@@ -147,9 +151,9 @@ explicitly asks.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-275 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
+281 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 283.
+runs 289.
 
 `tests/fakes.py` fakes **only the socket** — it reuses the real host allow-list
 check and the real poll loop, so adapter tests exercise the genuine security
