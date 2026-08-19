@@ -236,7 +236,7 @@ class ChordSvgTests(unittest.TestCase):
 
     def test_no_chords_no_section(self):
         html = report.build(payload(), chords=[])
-        self.assertNotIn("<h2>Chords</h2>", html)
+        self.assertNotIn("<h2>Play along</h2>", html)
 
     def test_keyboard_controls_are_wired(self):
         html = report.build(payload())
@@ -259,8 +259,54 @@ class PlayerWiringTests(unittest.TestCase):
         self.assertIn("timeupdate", html)
         self.assertIn("dataset.start", html)
 
-    def test_dark_mode_palette(self):
-        self.assertIn("prefers-color-scheme:dark", report.build(payload()))
+    def test_light_professional_palette(self):
+        # The page deliberately commits to one light editorial look.
+        html = report.build(payload())
+        self.assertIn("--card: #ffffff", html)
+        self.assertIn("--accent: #4f46e5", html)
+
+    def test_keyboard_hints_are_shown(self):
+        self.assertIn("<kbd>space</kbd>", report.build(payload()))
+
+
+class NoteRollTests(unittest.TestCase):
+    """The accuracy-first view: every note, its time, its pitch."""
+
+    EVENTS = [
+        {"start": 10.0, "end": 10.4, "midi": 64, "velocity": 90},   # E4 fill
+        {"start": 10.5, "end": 10.7, "midi": 67, "velocity": 60},   # G4 fill
+        {"start": 12.0, "end": 13.5, "midi": 48, "velocity": 100},  # C3 chord
+    ]
+
+    def test_one_rect_per_note_with_names(self):
+        svg = report.note_roll(self.EVENTS, 8.0, 40.0)
+        self.assertEqual(svg.count('class="nr"'), 3)
+        self.assertIn("E4", svg)
+        self.assertIn("G4", svg)
+
+    def test_notes_outside_the_window_are_excluded(self):
+        svg = report.note_roll(self.EVENTS, 0.0, 9.0)
+        self.assertEqual(svg, "")
+
+    def test_quiet_notes_render_fainter(self):
+        svg = report.note_roll(self.EVENTS, 8.0, 40.0)
+        # velocity 60 -> lower opacity than velocity 100
+        self.assertIn('opacity="0.66"', svg)
+        self.assertIn('opacity="0.86"', svg)
+
+    def test_rolls_appear_in_section_panels(self):
+        data = payload()
+        data["stages"]["chords"] = {
+            "chords": [
+                {"start": 10.0, "end": 10.9, "symbol": "C",
+                 "shorthand": "x32010",
+                 "positions": [{"string": 5, "fret": 3}]},
+            ],
+            "notes": self.EVENTS,
+        }
+        html = report.build(data)
+        self.assertIn('class="rollwrap" data-start="6.5"', html)
+        self.assertIn('class="roll-line"', html)
 
 
 if __name__ == "__main__":

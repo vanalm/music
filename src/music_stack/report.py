@@ -26,6 +26,7 @@ import tempfile
 from pathlib import Path
 
 from . import audio as audio_mod
+from .notes import note_name
 
 #: Section label -> hue, so the timeline is scannable at a glance.
 _SECTION_HUES = {
@@ -165,6 +166,64 @@ def chord_svg(positions, *, width=110, height=132):
     return "".join(parts)
 
 
+def note_roll(events, start, end, *, width=1000, row=8):
+    """A piano roll of every note in ``[start, end)`` — the licks included.
+
+    Time runs left to right across the section, pitch bottom to top, one
+    rectangle per transcribed note. This is the accuracy-first view: no
+    string-assignment guessing, just what was detected, when, at what
+    pitch. Hover a note for its name and time; the page script drives a
+    playhead across it in sync with the audio.
+    """
+    span = max(float(end) - float(start), 0.001)
+    notes = [
+        e for e in events or []
+        if float(e["start"]) < end and float(e["end"]) > start
+    ]
+    if not notes:
+        return ""
+    lo = min(n["midi"] for n in notes) - 1
+    hi = max(n["midi"] for n in notes) + 1
+    height = (hi - lo + 1) * row
+    parts = [
+        '<svg class="roll" viewBox="0 0 {w} {h}" width="100%" '
+        'preserveAspectRatio="none" '
+        'xmlns="http://www.w3.org/2000/svg">'.format(w=width, h=height)
+    ]
+    # Octave guide lines with a label at each C.
+    for midi in range(lo, hi + 1):
+        if midi % 12 != 0:
+            continue
+        y = (hi - midi) * row
+        parts.append(
+            '<line x1="0" y1="{y}" x2="{w}" y2="{y}" class="octave"/>'
+            '<text x="4" y="{ty}" class="octlabel">{name}</text>'.format(
+                y=y, w=width, ty=y - 2, name=note_name(midi)
+            )
+        )
+    for n in notes:
+        t0 = max(float(n["start"]), start)
+        t1 = min(float(n["end"]), end)
+        x = (t0 - start) / span * width
+        w = max((t1 - t0) / span * width, 3.0)
+        y = (hi - n["midi"]) * row
+        velocity = n.get("velocity")
+        opacity = 0.85
+        if velocity is not None:
+            opacity = 0.35 + 0.65 * max(0.0, min(float(velocity) / 127.0, 1.0))
+        parts.append(
+            '<rect class="nr" x="{x:.1f}" y="{y}" width="{w:.1f}" '
+            'height="{h}" rx="2" opacity="{o:.2f}">'
+            "<title>{name} · {t}s</title></rect>".format(
+                x=x, y=y + 1, w=w, h=row - 2, o=opacity,
+                name=_esc(note_name(n["midi"])),
+                t=round(float(n["start"]), 1),
+            )
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 # -- page ------------------------------------------------------------------
 
 
@@ -265,9 +324,9 @@ def build(result, *, audio_path=None, chords=None):
         )
         lyrics_html = (
             "<h2>Lyrics as sung</h2>"
-            '<p class="note">{}</p><pre class="lyrics">{}</pre>'.format(
-                _esc(provenance), _esc(lyrics["text"])
-            )
+            '<p class="note">{}</p>'
+            '<div class="card-block"><pre class="lyrics">{}</pre>'
+            "</div>".format(_esc(provenance), _esc(lyrics["text"]))
         )
 
     # -- stems ------------------------------------------------------------
@@ -296,6 +355,7 @@ def build(result, *, audio_path=None, chords=None):
         panels = []
         shown = set()
         norm_file = (stages.get("normalize") or {}).get("file")
+        all_notes = (stages.get("chords") or {}).get("notes") or []
         for label, s_start, s_end, events in brief_mod.progression_events(
             chords, sections
         ):
@@ -308,6 +368,16 @@ def build(result, *, audio_path=None, chords=None):
                 "{sym}</span>".format(t0=t0, t1=t1, sym=_esc(sym))
                 for sym, t0, t1 in events
             )
+            roll = note_roll(all_notes, s_start, s_end)
+            roll_html = ""
+            if roll:
+                roll_html = (
+                    '<div class="rollwrap" data-start="{t0}" '
+                    'data-end="{t1}">{roll}'
+                    '<div class="roll-line"></div></div>'.format(
+                        t0=s_start, t1=s_end, roll=roll
+                    )
+                )
             tab = chords_mod.render_chord_tab(
                 [
                     {"voicing": {"positions": canon[sym][1]}}
@@ -318,20 +388,31 @@ def build(result, *, audio_path=None, chords=None):
             lick = ""
             if norm_file:
                 lick = (
-                    '<code class="lick">music-stack lick --input {} '
-                    "--start {} --end {}</code>".format(
+                    '<div class="lickrow"><code class="lick">music-stack '
+                    "lick --input {} --start {} --end {}</code>"
+                    '<button class="copy" type="button">copy</button>'
+                    "</div>".format(
                         _esc(norm_file), _clock(s_start), _clock(s_end),
                     )
                 )
+            hue = _SECTION_HUES.get(str(label or "").lower(), 210)
             panels.append(
                 '<details class="panel" data-start="{t0}" data-end="{t1}" '
-                "open><summary><b>{label}</b> "
-                '<span class="range">{c0}–{c1}</span></summary>'
+                'open><summary><span class="seclabel" style="--hue:{hue}">'
+                "{label}</span>"
+                '<span class="range">{c0}–{c1}</span>'
+                '<span class="prog-mini">{mini}</span></summary>'
                 '<div class="chips">{chips}</div>'
-                '<pre class="tab">{tab}</pre>{lick}</details>'.format(
-                    t0=s_start, t1=s_end, label=_esc(label or "all"),
+                "{roll}"
+                '<details class="tabfold"><summary>Chord tab chart'
+                "</summary><pre class=\"tab\">{tab}</pre></details>"
+                "{lick}</details>".format(
+                    t0=s_start, t1=s_end, hue=hue,
+                    label=_esc(label or "all"),
                     c0=_clock(s_start), c1=_clock(s_end),
-                    chips=chips, tab=_esc(tab), lick=lick,
+                    mini=_esc(" · ".join(symbols[:8])
+                              + (" …" if len(symbols) > 8 else "")),
+                    chips=chips, roll=roll_html, tab=_esc(tab), lick=lick,
                 )
             )
         prog_html = ""
@@ -356,8 +437,11 @@ def build(result, *, audio_path=None, chords=None):
             )
         if cards or prog_html:
             chords_html = (
-                "<h2>Chords</h2>{prog}"
-                "<h3>Shapes</h3><div class=\"cards\">{cards}</div>"
+                "<h2>Play along</h2>"
+                '<p class="note">Chords and every transcribed note, section '
+                "by section. Click anywhere in a roll to hear that moment; "
+                "hover a note for its name.</p>{prog}"
+                "<h3>Chord shapes</h3><div class=\"cards\">{cards}</div>"
             ).format(prog=prog_html, cards="".join(cards))
 
     # -- questions --------------------------------------------------------
@@ -407,80 +491,156 @@ _TEMPLATE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <style>
+  /* A deliberately light, editorial surface: white cards on a warm gray
+     page, one indigo accent, hairline borders instead of heavy shadows. */
   :root {{
-    --bg: #fdfdfc; --fg: #1a1a1c; --muted: #6a6a70;
-    --panel: #f0f0ee; --accent: #2563eb;
+    --bg: #f6f7f9; --card: #ffffff; --fg: #16181d; --muted: #667085;
+    --line: #e4e7ec; --accent: #4f46e5; --accent-soft: #eef0fe;
+    --panel: #f2f4f7;
   }}
-  @media (prefers-color-scheme:dark) {{
-    :root {{ --bg: #131316; --fg: #ececf0; --muted: #9a9aa4;
-             --panel: #202024; }}
-  }}
+  * {{ box-sizing: border-box; }}
+  html {{ scroll-behavior: smooth; }}
   body {{
-    font: 16px/1.65 -apple-system, "Segoe UI", sans-serif;
-    max-width: 46rem; margin: 2.5rem auto; padding: 0 1.2rem;
-    background: var(--bg); color: var(--fg);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      Inter, "Segoe UI", Roboto, sans-serif;
+    margin: 0; background: var(--bg); color: var(--fg);
+    -webkit-font-smoothing: antialiased;
   }}
-  h1 {{ margin: 0 0 .2rem; letter-spacing: -.02em; }}
-  h2 {{ margin: 2.2rem 0 .6rem; font-size: 1.05rem; }}
-  .facts {{ color: var(--muted); margin-bottom: 1.4rem; }}
-  audio {{ width: 100%; margin: .6rem 0 .5rem; }}
+  main {{ max-width: 54rem; margin: 0 auto; padding: 1.4rem 1.2rem 4rem; }}
+  h1 {{ font-size: 1.55rem; letter-spacing: -.02em; margin: .4rem 0 .1rem; }}
+  h2 {{ font-size: .8rem; letter-spacing: .09em; text-transform: uppercase;
+        color: var(--muted); margin: 2.6rem 0 .8rem; }}
+  h3 {{ font-size: .8rem; letter-spacing: .09em; text-transform: uppercase;
+        color: var(--muted); margin: 2rem 0 .8rem; }}
+  .facts {{ color: var(--muted); font-size: .88rem; margin-bottom: 1rem; }}
+  .facts b {{ color: var(--fg); }}
+
+  .playerbar {{
+    position: sticky; top: 0; z-index: 10; background: var(--card);
+    border: 1px solid var(--line); border-radius: 14px;
+    padding: .8rem 1rem .9rem; margin: 1rem 0 1.6rem;
+    box-shadow: 0 1px 2px rgb(16 24 40 / .04),
+                0 8px 24px -18px rgb(16 24 40 / .25);
+  }}
+  audio {{ width: 100%; height: 40px; }}
+  .keys {{ color: var(--muted); font-size: .75rem; margin-top: .45rem; }}
+  .keys kbd {{
+    border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 5px; padding: 0 .35rem; font: inherit;
+    background: var(--panel);
+  }}
+
   .timeline {{
-    position: relative; display: flex; height: 3rem;
-    border-radius: 10px; overflow: hidden; cursor: pointer;
+    position: relative; display: flex; height: 2.6rem; margin-top: .7rem;
+    border-radius: 9px; overflow: hidden; cursor: pointer;
   }}
   .seg {{
     display: flex; align-items: center; justify-content: center;
-    min-width: 1.6rem; font-size: .72rem; font-weight: 650; color: #fff;
-    background: hsl(var(--hue,200) 42% 46%);
-    border-right: 1px solid rgb(255 255 255 / .35);
+    min-width: 1.4rem; font-size: .68rem; font-weight: 650; color: #fff;
+    background: hsl(var(--hue,210) 48% 52%);
+    border-right: 1px solid rgb(255 255 255 / .4);
   }}
-  .seg:hover {{ filter: brightness(1.18); }}
+  .seg:hover {{ filter: brightness(1.12); }}
   .seg span {{ overflow: hidden; text-overflow: ellipsis;
                white-space: nowrap; padding: 0 .3rem; }}
   #playhead {{
     position: absolute; top: 0; bottom: 0; left: 0; width: 2px;
-    background: #fff; box-shadow: 0 0 4px rgb(0 0 0 / .6);
+    background: #fff; box-shadow: 0 0 0 1px rgb(16 24 40 / .35);
     pointer-events: none; transition: left .2s linear;
   }}
-  .arrangement {{ color: var(--muted); font-size: .88rem; margin-top: .5rem; }}
-  .missing {{ font-size: .9rem; }}
+  .arrangement {{ color: var(--muted); font-size: .82rem; margin-top: .6rem; }}
+  .missing {{ font-size: .85rem; color: var(--muted); margin-top: .3rem; }}
+  .missing .chip {{ background: #fef3f2; color: #b42318;
+    border: 1px solid #fecdca; }}
+
+  .card-block {{
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 1.1rem 1.3rem;
+  }}
+  .lyrics {{ white-space: pre-wrap; font-size: .92rem; column-gap: 2.4rem;
+    margin: 0; font-family: inherit; }}
+  @media (min-width: 660px) {{ .lyrics {{ columns: 2; }} }}
+  .note {{ font-size: .84rem; color: var(--muted); }}
+  .stems {{ columns: 2; padding-left: 1.2rem; margin: 0; }}
+  .stems a {{ color: var(--accent); text-decoration: none; }}
+  .stems a:hover {{ text-decoration: underline; }}
+
+  .progression .panel {{
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; margin: .8rem 0; padding: .9rem 1.1rem;
+    transition: border-color .15s, box-shadow .15s;
+  }}
+  .progression .panel.now {{
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }}
+  .progression summary {{
+    cursor: pointer; display: flex; align-items: baseline; gap: .6rem;
+    list-style: none; flex-wrap: wrap;
+  }}
+  .progression summary::-webkit-details-marker {{ display: none; }}
+  .seclabel {{
+    font-size: .72rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: #fff; padding: .12rem .6rem;
+    border-radius: 999px; background: hsl(var(--hue,210) 48% 52%);
+  }}
+  .range {{ color: var(--muted); font-size: .8rem;
+    font-variant-numeric: tabular-nums; }}
+  .prog-mini {{ color: var(--muted); font-size: .8rem; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }}
+
+  .chips {{ margin: .7rem 0 .5rem; display: flex; flex-wrap: wrap;
+    gap: .3rem; }}
   .chip {{
-    display: inline-block; background: #c0392b; color: #fff;
-    border-radius: 99px; padding: .05rem .6rem; margin: 0 .2rem;
-    font-size: .78rem; font-weight: 650;
+    padding: .12rem .6rem; border-radius: 999px; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line);
+    font-size: .8rem; font-weight: 600; transition: all .12s;
   }}
-  .lyrics {{
-    white-space: pre-wrap; background: var(--panel); padding: 1rem 1.2rem;
-    border-radius: 10px; font-family: inherit;
+  .chip:hover {{ border-color: var(--accent); color: var(--accent); }}
+  .chip.now {{ background: var(--accent); border-color: var(--accent);
+    color: #fff; }}
+
+  .rollwrap {{ position: relative; margin: .6rem 0; cursor: crosshair;
+    border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
+    background: linear-gradient(180deg, #fcfcfd, #f8f9fb); }}
+  .roll {{ display: block; }}
+  .roll .octave {{ stroke: var(--line); stroke-width: 1; }}
+  .roll .octlabel {{ fill: var(--muted); font: 600 9px sans-serif; }}
+  .roll .nr {{ fill: var(--accent); }}
+  .roll .nr:hover {{ fill: #16181d; }}
+  .roll-line {{
+    position: absolute; top: 0; bottom: 0; left: 0; width: 1.5px;
+    background: #e11d48; display: none; pointer-events: none;
   }}
-  .note {{ font-size: .85rem; color: var(--muted); font-style: italic; }}
-  .stems {{ columns: 2; padding-left: 1.2rem; }}
-  .stems a {{ color: var(--accent); }}
-  .cards {{ display: flex; flex-wrap: wrap; gap: 1rem; }}
-  .progression .panel {{ margin: .6rem 0; padding: .5rem .8rem;
-    background: var(--panel); border-radius: 8px;
-    border-left: 3px solid transparent; }}
-  .progression .panel.now {{ border-left-color: var(--accent, #4f8fd6); }}
-  .progression summary {{ cursor: pointer; }}
-  .progression .range {{ opacity: .6; font-size: .85rem;
-    margin-left: .4rem; }}
-  .chips {{ margin: .5rem 0; display: flex; flex-wrap: wrap; gap: .3rem; }}
-  .chip {{ padding: .1rem .55rem; border-radius: 999px; cursor: pointer;
-    background: color-mix(in srgb, currentColor 12%, transparent);
-    font-size: .85rem; }}
-  .chip.now {{ background: var(--accent, #4f8fd6); color: #fff; }}
-  .tab {{ overflow-x: auto; font-size: .78rem; line-height: 1.35;
-    margin: .4rem 0; }}
-  .progression .lick {{ display: block; margin: .3rem 0 0;
-    font-size: .78rem; opacity: .75; }}
+
+  .tabfold {{ margin: .5rem 0 0; }}
+  .tabfold summary {{ cursor: pointer; color: var(--muted);
+    font-size: .8rem; }}
+  .tab {{ overflow-x: auto; font-size: .78rem; line-height: 1.4;
+    margin: .5rem 0 0; background: var(--panel); padding: .7rem .9rem;
+    border-radius: 9px; }}
+  .lickrow {{ display: flex; gap: .5rem; align-items: center;
+    margin-top: .6rem; }}
+  .lickrow .lick {{ flex: 1; min-width: 0; overflow-x: auto;
+    white-space: nowrap; font-size: .74rem; color: var(--muted); }}
+  .copy {{
+    border: 1px solid var(--line); background: var(--card);
+    border-radius: 7px; padding: .15rem .6rem; font-size: .74rem;
+    cursor: pointer; color: var(--muted);
+  }}
+  .copy:hover {{ border-color: var(--accent); color: var(--accent); }}
+
+  .cards {{ display: grid; gap: .8rem;
+    grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }}
   .card {{
-    margin: 0; padding: .6rem .4rem .4rem; background: var(--panel);
-    border-radius: 10px; text-align: center;
+    margin: 0; padding: .7rem .4rem .5rem; background: var(--card);
+    border: 1px solid var(--line); border-radius: 12px; text-align: center;
   }}
-  .card figcaption {{ font-weight: 700; }}
-  .card small {{ display: block; font-weight: 400; color: var(--muted); }}
-  .chordbox {{ width: 110px; height: 132px; }}
-  .chordbox .fret, .chordbox .string {{ stroke: var(--muted); stroke-width: 1; }}
+  .card figcaption {{ font-weight: 700; font-size: .92rem; }}
+  .card small {{ display: block; font-weight: 500; color: var(--muted);
+    font-size: .72rem; margin-top: .1rem; }}
+  .chordbox {{ width: 100%; max-width: 110px; height: auto; }}
+  .chordbox .fret, .chordbox .string {{ stroke: #d0d5dd; stroke-width: 1; }}
   .chordbox .nut {{ stroke: var(--fg); stroke-width: 3; }}
   .chordbox .dot {{ fill: var(--fg); }}
   .chordbox .open {{ fill: none; stroke: var(--fg); stroke-width: 1.5; }}
@@ -495,18 +655,25 @@ _TEMPLATE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+<main>
 <h1>{title}</h1>
 <div class="facts">{facts}</div>
+<div class="playerbar">
 {audio}
 {timeline}
+<div class="keys"><kbd>space</kbd> play / pause &nbsp; <kbd>←</kbd>
+<kbd>→</kbd> scrub 1s &nbsp; click a section, chord, or note to jump
+there</div>
+</div>
 <div class="arrangement">{arrangement}</div>
 {missing}
-{lyrics}
 {chords}
+{lyrics}
 {stems}
 <h2>To finish this</h2>
 <ul>{questions}</ul>
 {skipped}
+</main>
 <script>
   (function () {{
     var player = document.getElementById("player");
@@ -523,6 +690,17 @@ _TEMPLATE = """<!DOCTYPE html>
     var timed = document.querySelectorAll(
       ".panel[data-start], .chip[data-start]"
     );
+    var rolls = document.querySelectorAll(".rollwrap[data-start]");
+    rolls.forEach(function (wrap) {{
+      wrap.addEventListener("click", function (e) {{
+        var rect = wrap.getBoundingClientRect();
+        var frac = (e.clientX - rect.left) / rect.width;
+        var t0 = parseFloat(wrap.dataset.start);
+        var t1 = parseFloat(wrap.dataset.end);
+        player.currentTime = t0 + frac * (t1 - t0);
+        player.play();
+      }});
+    }});
     player.addEventListener("timeupdate", function () {{
       if (playhead && timeline && player.duration) {{
         playhead.style.left =
@@ -533,6 +711,28 @@ _TEMPLATE = """<!DOCTYPE html>
         var on = t >= parseFloat(el.dataset.start) &&
                  t < parseFloat(el.dataset.end);
         el.classList.toggle("now", on);
+      }});
+      rolls.forEach(function (wrap) {{
+        var t0 = parseFloat(wrap.dataset.start);
+        var t1 = parseFloat(wrap.dataset.end);
+        var line = wrap.querySelector(".roll-line");
+        if (!line) return;
+        if (t >= t0 && t < t1) {{
+          line.style.display = "block";
+          line.style.left = (100 * (t - t0) / (t1 - t0)) + "%";
+        }} else {{
+          line.style.display = "none";
+        }}
+      }});
+    }});
+    document.querySelectorAll(".copy").forEach(function (btn) {{
+      btn.addEventListener("click", function () {{
+        var code = btn.parentElement.querySelector(".lick");
+        if (!code || !navigator.clipboard) return;
+        navigator.clipboard.writeText(code.textContent).then(function () {{
+          btn.textContent = "copied";
+          setTimeout(function () {{ btn.textContent = "copy"; }}, 1400);
+        }});
       }});
     }});
     document.addEventListener("keydown", function (e) {{

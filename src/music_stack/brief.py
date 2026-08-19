@@ -145,6 +145,7 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
             stage["from_instrumental_stem"] = bool(instrumental)
             if not dry_run:
                 stage["chords"] = detect_chords(stage.get("note_events"))
+                stage["notes"] = detect_notes(stage.get("note_events"))
             result["stages"]["chords"] = stage
         except Exception as exc:
             # A failed transcription costs one section, never the brief.
@@ -219,6 +220,28 @@ def detect_chords(note_events_path, *, min_duration=0.09, min_notes=3,
         if voicing:
             entry["positions"] = voicing["positions"]
             entry["shorthand"] = voicing["shorthand"]
+        out.append(entry)
+    return out
+
+
+def detect_notes(note_events_path, *, min_duration=0.04):
+    """Every transcribed note, lightly filtered — fills and runs included.
+
+    Where :func:`detect_chords` keeps only sustained groupings, this keeps
+    the single notes and quick slides *between* the chords — the licks.
+    Sub-40ms events are attack transients even a fast hammer-on outlasts.
+    """
+    from . import notes as notes_mod
+
+    if not note_events_path:
+        return []
+    out = []
+    for e in notes_mod.read_note_events(note_events_path):
+        if (e["end"] - e["start"]) < min_duration:
+            continue
+        entry = {"start": e["start"], "end": e["end"], "midi": e["midi"]}
+        if e.get("velocity") is not None:
+            entry["velocity"] = e["velocity"]
         out.append(entry)
     return out
 
