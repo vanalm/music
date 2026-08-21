@@ -1,9 +1,15 @@
 # music-stack
 
-Drop in a rough demo — an iPhone voice memo, a phone video, a scratch take —
-and get back what you need to finish the song: tempo, the arrangement you
-actually played, separated stems, the lyric as sung, the notes in that lick,
-chord shapes, and sheet music.
+Drop in a song you want to play — any recording: a track you're learning,
+an iPhone voice memo, a phone video, your own rough demo — and get back a
+practice room: the chords as played, guitar tab in your choice of neck
+position, sheet music, the sung melody, lyrics synced word by word, stems
+to play along with, and a player that scrubs, loops any passage, and slows
+the whole thing down without changing pitch.
+
+And when what you dropped in is your own half-written sketch, the same
+pass writes a songwriting brief: the arrangement you actually played, the
+sections still missing, and the questions to answer next.
 
 **Runs on your machine. Nothing is uploaded.**
 
@@ -27,7 +33,8 @@ have finished arriving.
 
 ## What comes out
 
-`projects/<slug>/brief.md`:
+Two things: **`report.html` — the Studio, the page you play from** (below)
+— and `brief.md`, a one-page summary you can read or paste into a chat:
 
 ```markdown
 # Kaimana Nights

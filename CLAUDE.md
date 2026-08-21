@@ -5,10 +5,15 @@ Read this first. It is the map; `README.md` is the user-facing pitch and
 
 ## What this is
 
-A local-first songwriting toolchain. You give it a rough demo — an iPhone voice
-memo, a phone video, a scratch take — and it returns the things you need to
-finish the song: tempo, the arrangement as played, separated stems, the lyric
-as sung, the notes in a lick, chord shapes, and sheet music.
+A local-first play-along toolchain (with a songwriting side). You give it a
+song — any recording you want to learn to play, or a rough demo of your own
+— and it returns the things you need to play it: chords as played, guitar
+tab, sheet music, the sung melody, word-synced lyrics, separated stems, and
+the Studio play-along page. **The goal is playing, not transcribing for its
+own sake** — features that put a song under the user's hands come first.
+When the input is a half-written sketch, the same pass also writes a
+songwriting brief: tempo, the arrangement as played, missing sections, and
+derived questions.
 
 **It runs on the user's machine. Nothing is uploaded unless a hosted service is
 explicitly invoked, and the hosted services are mostly unusable (see below).**
