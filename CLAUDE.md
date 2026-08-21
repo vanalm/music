@@ -23,25 +23,38 @@ Scaffolds a project, preserves the original, transcodes a lossless working
 copy, runs every analysis stage the machine supports, silently skips the rest,
 and writes `projects/<slug>/brief.md` — a one-page songwriting brief with
 tempo, arrangement, missing sections, chords as played, lyrics, and derived
-questions — plus `report.html`, a self-contained interactive play-along page:
-per-section panels a single switcher flips between piano roll (notes with
-names aligned beneath), guitar tab (alternate fingerings by neck position), grand-staff
-sheet music with time signature, bar lines, and beamed rhythms from
-allin1's beat grid, and chord chart; lyrics ride every chart;
-a playhead runs through every view and follows into the next section;
-time-synced lyrics (karaoke line + clickable lines); keyboard transport,
-speed pills that slow playback without changing pitch ([ and ] nudge),
-and ⌘-click A/B looping for practice; plain clicks move the playhead without
-autoplay; ⌥-click sounds a note (or the whole moment when the
-click misses one), ⌥-drag sweeps through the notes with held, cross-
-fading voices, and holding ⌥ surfaces a per-section ▶ tones button that
-plays the transcription as synth at tempo (Web Audio, chord columns
-strum).
-The report embeds a compact AAC preview as a data URI when ffmpeg is present
-and small enough; otherwise it degrades to a relative src and says so.
+questions — plus `report.html`, **the Studio**: a self-contained two-pane
+play-along page. Score on the left (one panel per section, switchable
+between piano roll, guitar tab with neck positions, grand-staff sheet music
+with time signature/bar lines/beamed rhythms from allin1's beat grid, and
+chord chart — for the instruments or the sung melody via an
+Instrument | Voice toggle); a sticky practice dock on the right (section
+timeline, transport, speed pills that slow playback without changing pitch,
+the chord under the hand right now with its grip and what's next, a lyric
+window that follows playback, the song's shapes). Lyrics ride every chart
+word by word — real Whisper word timestamps when present, onset-snapped
+interpolation otherwise. Click moves the playhead without autoplay, drag
+scrubs the recording through the spot under the pointer, ⌘-click ×2 loops
+a passage, ⌥-click sounds a note or moment, ▶ tones plays a section's
+transcription as synth at tempo, and a light/dark toggle plus
+view/speed/position state persist across openings (localStorage).
+The page renders its charts client-side from one inline `window.SONG`
+payload; `report.py` inlines `assets/report-lib.js` (chart renderers —
+faithful ports of the tested Python reference implementations in
+`report.py`) and `assets/score-panel.js` (the `<score-panel>`,
+`<song-timeline>`, `<chord-cards>` custom elements). The report embeds a
+compact AAC preview as a data URI when ffmpeg is present and small enough;
+otherwise it degrades to a relative src and says so.
 
 A machine with only ffmpeg still produces a brief. Each optional tool installed
 adds a section.
+
+**Bring your own stems.** Audio files dropped into `<project>/stems/user/`
+(from Moises, Suno, anywhere) are used instead of running demucs —
+`brief.pick_stem()` recognises the common naming dialects (vocals/vocal/vox,
+other/instrumental/guitars/no_vocals) — and a cleaner hosted separation
+improves lyrics, the voice trace, and chords downstream. Re-run `analyze`
+after dropping them in.
 
 ## Command surface
 
@@ -200,12 +213,15 @@ and the fixture together.
 
 ## Adding a report view
 
-`report.SectionPanel` is the unit of extensibility: one method per view,
-registered in its `VIEWS` tuple (key, switcher label, method name). The
-global switcher, the panes, and the page script's toggling all derive from
-that registry — a fifth view is one method plus one row. Timed interactivity
-comes free by convention: give the view's wrapper `data-start`/`data-end`
-(plus `data-times`/`data-xs`/`data-cells` or `data-mids` for
-sequence-spaced charts) and the existing script drives its playhead,
-alt-click previews, ⌘-click looping, and lyric alignment. `_seq_x` /
-`seqPos` are the single time→x mappers — never a second copy.
+Charts render client-side: `<score-panel>` in `assets/score-panel.js` owns
+the views. A fifth view is (1) a renderer in `assets/report-lib.js`, ported
+from a tested Python reference implementation you add to `report.py` first
+— behaviour changes start in Python, in a test, and are mirrored into the
+asset; (2) a branch in `score-panel.js`'s `_render` that builds the HTML
+and sets `this._seq = {times, xs, mids}` for sequence-spaced charts (that
+one field buys the playhead, click-to-seek, ⌥ audition, loop shading, and
+lyric alignment); (3) a pill in `report.py`'s control row — the app script
+drives every panel from the pills via attributes. `_seq_x` (Python) /
+`seqPos` (JS) are the single time→x mappers — never a second copy. All
+component theming flows through the `--sp-*` custom properties set on the
+page root.

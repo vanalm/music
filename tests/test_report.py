@@ -1,6 +1,15 @@
-"""HTML report tests — structure, escaping, interactivity hooks, degradation."""
+"""Studio report tests — payload contract, page chrome, degradation.
 
+The page renders its charts client-side from one inline ``window.SONG``
+payload; the Python renderers remain the tested reference implementations
+of the musical behaviour their JS ports mirror. Build-level tests therefore
+assert two things: the payload carries the right data, and the static
+chrome + inlined scripts wire the behavioural contract.
+"""
+
+import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -55,30 +64,114 @@ def payload(**overrides):
     return base
 
 
+def song_of(html):
+    """Extract and parse the inline window.SONG payload."""
+    match = re.search(r"window\.SONG = (.*?);</script>", html, re.S)
+    assert match, "no window.SONG payload in the page"
+    return json.loads(match.group(1))
+
+
+class PayloadTests(unittest.TestCase):
+    """window.SONG is the page's whole data contract."""
+
+    CHORDS = [
+        {"start": 7.0, "end": 7.8, "symbol": "C", "shorthand": "x32010",
+         "positions": [{"string": 5, "fret": 3}, {"string": 4, "fret": 2},
+                       {"string": 2, "fret": 1}]},
+        {"start": 32.0, "end": 32.9, "symbol": "G", "shorthand": "320003",
+         "positions": [{"string": 6, "fret": 3}, {"string": 5, "fret": 2},
+                       {"string": 1, "fret": 3}]},
+    ]
+
+    def test_sections_beats_and_facts_travel(self):
+        song = song_of(report.build(payload()))
+        self.assertEqual(len(song["sections"]), 4)
+        self.assertEqual(song["sections"][2]["start"], 31.0)
+        self.assertEqual(song["bpm"], 84)
+        self.assertEqual(song["duration"], 74.0)
+        self.assertEqual(song["missing"], ["bridge", "outro"])
+
+    def test_notes_compact_to_rows(self):
+        data = payload()
+        data["stages"]["chords"] = {
+            "chords": self.CHORDS,
+            "notes": [{"start": 10.0, "end": 10.62, "midi": 64,
+                       "velocity": 90}],
+        }
+        song = song_of(report.build(data))
+        self.assertEqual(song["notes"], [[10.0, 10.62, 64, 90]])
+
+    def test_chords_carry_fingering_with_midi(self):
+        data = payload()
+        data["stages"]["chords"] = {"chords": self.CHORDS}
+        song = song_of(report.build(data))
+        first = song["chords"][0]
+        self.assertEqual(first["symbol"], "C")
+        self.assertEqual(first["short"], "x32010")
+        # [string, fret, midi]: string 5 fret 3 -> A2+3 = C3 = 48.
+        self.assertIn([5, 3, 48], first["pos"])
+
+    def test_canonical_shapes_ship_precomputed(self):
+        data = payload()
+        data["stages"]["chords"] = {"chords": self.CHORDS}
+        song = song_of(report.build(data))
+        self.assertIn("C", song["canon"])
+        self.assertEqual(song["canon"]["C"]["short"], "x32010")
+
+    def test_voice_absent_is_null_not_empty(self):
+        song = song_of(report.build(payload()))
+        self.assertIsNone(song["voice_notes"])
+
+    def test_voice_notes_travel_when_present(self):
+        data = payload()
+        data["stages"]["voice"] = {
+            "notes": [{"start": 1.0, "end": 1.5, "midi": 60}], "chords": [],
+        }
+        song = song_of(report.build(data))
+        self.assertEqual(song["voice_notes"], [[1.0, 1.5, 60]])
+
+    def test_lyric_segments_and_words_pass_through(self):
+        data = payload()
+        data["stages"]["lyrics"]["segments"] = [
+            {"start": 7.5, "end": 11.0, "text": "walking down",
+             "words": [{"start": 7.5, "end": 8.1, "text": "walking"},
+                       {"start": 8.4, "end": 9.0, "text": "down"}]},
+        ]
+        song = song_of(report.build(data))
+        self.assertEqual(song["lyric_segments"][0]["words"][1]["text"], "down")
+        self.assertTrue(song["from_isolated_vocal"])
+
+    def test_questions_and_norm_file_travel(self):
+        data = payload()
+        data["stages"]["normalize"]["file"] = "/tmp/p/normalized/song.wav"
+        song = song_of(report.build(data))
+        self.assertTrue(song["questions"])
+        self.assertEqual(song["norm_file"], "/tmp/p/normalized/song.wav")
+
+    def test_stems_reduce_to_names(self):
+        song = song_of(report.build(payload()))
+        self.assertEqual(song["stems"], ["vocals.wav", "other.wav"])
+
+
 class StructureTests(unittest.TestCase):
-    def test_sections_become_clickable_segments(self):
+    def test_timeline_component_is_on_the_page(self):
         html = report.build(payload())
-        self.assertIn('data-start="31.0"', html)
-        self.assertEqual(html.count('class="seg"'), 4)
+        self.assertIn("<song-timeline>", html)
+        self.assertIn("song-timeline .st-seg", html)   # its inlined CSS
 
-    def test_segment_widths_are_proportional(self):
+    def test_missing_sections_are_called_out(self):
         html = report.build(payload())
-        # The chorus is 21/74 of the song ≈ 28.378%
-        self.assertIn("width:28.378%", html)
-
-    def test_missing_sections_render_as_chips(self):
-        html = report.build(payload())
-        self.assertIn("Not present yet", html)
+        self.assertIn("not present yet", html)
         self.assertIn("bridge", html)
 
-    def test_lyrics_and_provenance(self):
+    def test_lyrics_provenance_is_stated(self):
         html = report.build(payload())
-        self.assertIn("walking down", html)
-        self.assertIn("isolated vocal stem", html)
+        self.assertIn("isolated vocal", html)
 
-    def test_stems_link_by_relative_name(self):
+    def test_stems_listed_in_the_dock(self):
         html = report.build(payload())
-        self.assertIn('href="vocals.wav"', html)
+        self.assertIn("Stems", html)
+        self.assertIn("vocals · other", html)
 
 
 class DegradationTests(unittest.TestCase):
@@ -103,6 +196,20 @@ class DegradationTests(unittest.TestCase):
         html = report.build(payload(), audio_path="/nope/demo.wav")
         # Falls back to a relative filename source rather than nothing.
         self.assertIn('src="demo.wav"', html)
+
+    def test_no_chords_still_panels_per_section(self):
+        # The roll and staff render from notes alone; sections without a
+        # chord analysis still get their score panel.
+        html = report.build(payload())
+        self.assertEqual(html.count("<score-panel view="), 4)
+        self.assertIn('data-start="0.0"', html)
+
+    def test_no_lyrics_names_the_fix(self):
+        data = payload()
+        del data["stages"]["lyrics"]
+        html = report.build(data)
+        self.assertIn("No lyrics transcribed", html)
+        self.assertIn("Whisper", html)
 
 
 class PreviewEmbedTests(unittest.TestCase):
@@ -157,49 +264,45 @@ class PreviewEmbedTests(unittest.TestCase):
         self.assertNotIn("not embedded", html)
 
 
-class ChordsFromResultTests(unittest.TestCase):
-    """The report shows what to play without anyone passing chords= by hand."""
+class ScorePanelsTests(unittest.TestCase):
+    """The score: one static section skeleton per panel, charts client-side."""
 
-    CHORDS = [
-        {"start": 7.0, "end": 7.8, "symbol": "C", "shorthand": "x32010",
-         "positions": [{"string": 5, "fret": 3}, {"string": 4, "fret": 2},
-                       {"string": 2, "fret": 1}]},
-        {"start": 32.0, "end": 32.9, "symbol": "G", "shorthand": "320003",
-         "positions": [{"string": 6, "fret": 3}, {"string": 5, "fret": 2},
-                       {"string": 1, "fret": 3}]},
-    ]
+    CHORDS = PayloadTests.CHORDS
 
-    def test_progression_and_boxes_render_from_the_stages_dict(self):
+    def _data(self):
         data = payload()
         data["stages"]["chords"] = {"chords": self.CHORDS}
         data["stages"]["normalize"]["file"] = "/tmp/p/normalized/song.wav"
-        html = report.build(data)
-        self.assertIn('class="progression score"', html)
-        self.assertIn("verse", html)
-        self.assertIn("x32010", html)          # chord box card
-        self.assertIn("music-stack lick --input", html)
+        return data
 
-    def test_section_panels_are_wired_for_live_playback(self):
-        data = payload()
-        data["stages"]["chords"] = {"chords": self.CHORDS}
-        html = report.build(data)
-        # A chip per played chord, timed so the script can light it up.
-        self.assertIn('<span class="chip" data-start="7.0" data-end="7.8">C', html)
-        # Each section panel carries its span and a tab chart.
-        self.assertIn('<section class="panel scoreblock" data-start="6.5"',
-                      html)
-        # Sections join into one continuous score surface.
-        self.assertIn('class="progression score"', html)
-        self.assertIn('<pre class="tab">', html)
-        self.assertIn("e|", html)
+    def test_sections_become_panels_with_score_elements(self):
+        html = report.build(self._data())
+        self.assertIn('<section class="panel" data-start="6.5"', html)
+        self.assertIn('<score-panel view="roll" source="inst"', html)
+        # A chip, a range, and the chord mini all in the header.
+        self.assertIn('class="pchip"', html)
+        self.assertIn("0:06–0:31", html)
+
+    def test_chord_mini_summarises_the_progression(self):
+        html = report.build(self._data())
+        self.assertIn('class="pmini">C<', html)
+
+    def test_lick_command_is_folded_away(self):
+        html = report.build(self._data())
+        self.assertIn('<details class="lickrow">', html)
+        self.assertIn("music-stack lick --input", html)
+        self.assertIn('class="copy"', html)
 
     def test_explicit_chords_param_still_wins(self):
         html = report.build(payload(), chords=self.CHORDS)
-        self.assertIn("x32010", html)
+        song = song_of(html)
+        self.assertEqual(song["chords"][0]["symbol"], "C")
+        self.assertIn("x32010", html)  # canon in payload
 
-    def test_no_chords_no_section(self):
-        html = report.build(payload())
-        self.assertNotIn('class="progression', html)
+    def test_tones_button_per_panel(self):
+        # Panels group where chords were played: the verse and the chorus.
+        html = report.build(self._data())
+        self.assertEqual(html.count('class="tonesbtn"'), 2)
 
 
 class EscapingTests(unittest.TestCase):
@@ -208,7 +311,18 @@ class EscapingTests(unittest.TestCase):
         self.assertNotIn("<script>alert", html)
         self.assertIn("&lt;script&gt;", html)
 
-    def test_lyrics_are_escaped(self):
+    def test_payload_cannot_break_out_of_its_script_block(self):
+        data = payload()
+        data["stages"]["lyrics"]["text"] = "love & </script><b>hate</b>"
+        html = report.build(data)
+        # No "<" survives inside the JSON payload — < stays inert.
+        blob = re.search(r"window\.SONG = (.*?);</script>", html, re.S).group(1)
+        self.assertNotIn("<", blob)
+        self.assertEqual(
+            song_of(html)["lyrics_text"], "love & </script><b>hate</b>"
+        )
+
+    def test_lyrics_fallback_block_is_escaped(self):
         data = payload()
         data["stages"]["lyrics"]["text"] = "love & <hate>"
         html = report.build(data)
@@ -228,24 +342,12 @@ class ChordSvgTests(unittest.TestCase):
         self.assertIn('class="dot"', svg)
         self.assertIn('class="open"', svg)
 
-    def test_chords_section_renders_each_shape_once(self):
-        v = self._voicing([48, 52, 55, 60, 64])
-        chord_list = [
-            {"symbol": "C", "shorthand": v["shorthand"], "positions": v["positions"]},
-            {"symbol": "C", "shorthand": v["shorthand"], "positions": v["positions"]},
-        ]
-        html = report.build(payload(), chords=chord_list)
-        self.assertEqual(html.count('<figure class="card">'), 1)
-
-    def test_no_chords_no_section(self):
-        html = report.build(payload(), chords=[])
-        self.assertNotIn("<h2>Play along</h2>", html)
-
-    def test_keyboard_controls_are_wired(self):
-        html = report.build(payload())
-        self.assertIn('e.code === "Space"', html)
-        self.assertIn('e.code === "ArrowRight"', html)
-        self.assertIn('e.code === "ArrowLeft"', html)
+    def test_wide_voicing_draws_instead_of_crashing(self):
+        # A detected (not textbook) shape can span more than five frets.
+        positions = [{"string": 6, "fret": 12}, {"string": 5, "fret": 0},
+                     {"string": 1, "fret": 17}]
+        svg = report.chord_svg(positions)
+        self.assertIn("<svg", svg)
 
     def test_notes_carry_midi_and_time_for_alt_click_to_hear(self):
         roll = report.note_roll(
@@ -265,106 +367,180 @@ class ChordSvgTests(unittest.TestCase):
         self.assertEqual(sorted(mids[0]), [60, 64])
         self.assertEqual(len(mids), 1)
 
-    def test_interaction_contract_in_the_script(self):
+
+class BehaviouralContractTests(unittest.TestCase):
+    """The interactions the page must keep, wherever they now live."""
+
+    def test_keyboard_transport_is_wired(self):
         html = report.build(payload())
-        # Alt previews; a plain click moves the playhead without playing.
-        self.assertIn("e.altKey", html)
-        self.assertIn("only moves the playhead", html)
+        for marker in ('e.code === "Space"', 'e.code === "ArrowRight"',
+                       'e.code === "ArrowLeft"', 'e.code === "BracketLeft"'):
+            self.assertIn(marker, html)
+        self.assertIn("<kbd>space</kbd>", html)
 
     def test_speed_control_preserves_pitch(self):
         html = report.build(payload())
-        self.assertIn('class="speedbar"', html)
-        self.assertIn('data-rate="0.5"', html)
         self.assertIn("preservesPitch", html)
-        self.assertIn('e.code === "BracketLeft"', html)
+        self.assertIn('data-rate="0.5"', html)
         self.assertIn("same pitch, slower song", html)
 
-    def test_tones_playback_is_wired(self):
-        data = payload()
-        data["stages"]["chords"] = {
-            "chords": [
-                {"start": 10.0, "end": 10.9, "symbol": "C",
-                 "shorthand": "x32010",
-                 "positions": [{"string": 5, "fret": 3}]},
-            ],
-            "notes": [{"start": 10.0, "end": 10.62, "midi": 64}],
-        }
-        html = report.build(data)
-        # Durations travel with the roll so playback keeps the tempo.
-        self.assertIn('data-dur="0.62"', html)
-        self.assertIn('class="tonesbtn"', html)
-        for marker in ("playTones", "stopTones", "altdown",
-                       "DynamicsCompressor"):
-            self.assertIn(marker, html)
-
-    def test_alt_drag_audition_is_wired(self):
+    def test_speed_menu_starts_closed(self):
         html = report.build(payload())
-        # Sustained voices start on mousedown, retrigger per moment
-        # crossed, and release on mouseup; the follow-up click is eaten.
-        for marker in ("holdTones", "releaseVoices", "auditionMove",
-                       "beginAudition", "suppressClick"):
-            self.assertIn(marker, html)
-        self.assertIn("⌥-drag", html)
-
-    def test_tab_and_chord_cells_carry_string_midi_pairs(self):
-        data = payload()
-        data["stages"]["chords"] = {
-            "chords": [
-                {"start": 10.0, "end": 10.9, "symbol": "C",
-                 "shorthand": "x32010",
-                 "positions": [{"string": 5, "fret": 3}]},
-            ],
-            "notes": [{"start": 10.0, "end": 10.4, "midi": 64}],
-        }
-        html = report.build(data)
-        # Guitar tab: E4 open high e -> string 1, midi 64.
-        self.assertIn('data-cells="1:64"', html)
-        # Chord chart: C's textbook grip starts on string 5 fret 3 -> C3.
-        self.assertIn("5:48", html)
-        self.assertIn("previewTone", html)
-        self.assertIn("AudioContext", html)
+        self.assertIn('<div id="ratemenu" hidden>', html)
 
     def test_ab_loop_is_wired(self):
         html = report.build(payload())
-        # cmd-click sets the points, escape clears, the region is shaded,
-        # playback and scrubbing wrap at the loop end.
-        self.assertIn("e.metaKey", html)
-        self.assertIn('e.code === "Escape"', html)
-        self.assertIn("loop-shade", html)
-        self.assertIn('id="loopbadge"', html)
-        self.assertIn("loop.b !== null && player.currentTime >= loop.b",
-                      html)
+        for marker in ("sp-loop-point", 'e.code === "Escape"', "loopbadge",
+                       "st-loop", "sp-loop"):
+            self.assertIn(marker, html)
+        self.assertIn("state.loopB != null && t >= state.loopB", html)
         self.assertIn("⌘", html)
 
-    def test_wide_voicing_draws_instead_of_crashing(self):
-        # A detected (not textbook) shape can span more than five frets.
-        positions = [{"string": 6, "fret": 12}, {"string": 5, "fret": 0},
-                     {"string": 1, "fret": 17}]
-        svg = report.chord_svg(positions)
-        self.assertIn("<svg", svg)
-
-
-class PlayerWiringTests(unittest.TestCase):
-    def test_playhead_and_seek_script_present(self):
+    def test_drag_scrub_is_wired(self):
         html = report.build(payload())
-        self.assertIn('id="playhead"', html)
-        self.assertIn("timeupdate", html)
-        self.assertIn("dataset.start", html)
+        # score-panel emits scrub events; the app plays through them and
+        # restores pause on release.
+        for marker in ("sp-scrub-start", "sp-scrub-end", "wasPaused",
+                       "pointerdown"):
+            self.assertIn(marker, html)
+        self.assertIn("drag = scrub", html)
 
-    def test_light_professional_palette(self):
-        # The page deliberately commits to one warm editorial look:
-        # paper ground, terracotta accents, slate-blue notes.
+    def test_alt_click_audition_is_wired(self):
         html = report.build(payload())
-        self.assertIn("--card: #fffdf8", html)
-        self.assertIn("--accent: #bc5a3c", html)
-        self.assertIn("--note: #54677d", html)
+        self.assertIn("previewTone", html)
+        self.assertIn("e.altKey", html)
+        self.assertIn("AudioContext", html)
 
-    def test_keyboard_hints_are_shown(self):
-        self.assertIn("<kbd>space</kbd>", report.build(payload()))
+    def test_tones_playback_is_wired(self):
+        html = report.build(payload())
+        for marker in ("playTones", "stopTones", "DynamicsCompressor"):
+            self.assertIn(marker, html)
+
+    def test_tones_follow_the_source_toggle(self):
+        html = report.build(payload())
+        self.assertIn('state.source === "voice"', html)
+
+    def test_plain_click_seeks_without_playing(self):
+        html = report.build(payload())
+        self.assertIn("sp-seek", html)
+        # Seeking sets currentTime; only the play button / space starts
+        # playback.
+        self.assertIn("audio.currentTime = e.detail.t", html)
+
+    def test_empty_area_clicks_resolve_by_position_not_section_start(self):
+        # closest("[data-start]") must not escape the score-panel into the
+        # section wrapper — that seeked every empty-area click (and both
+        # ⌘-click loop points) to the section's beginning.
+        html = report.build(payload())
+        self.assertIn("if (timed && !self.contains(timed)) timed = null;",
+                      html)
+
+    def test_seq_chart_hit_tests_measure_from_the_svg(self):
+        # Column x coordinates live in the SVG's pixel space; measuring
+        # from the padded container skewed ⌥-clicks onto neighbours.
+        html = report.build(payload())
+        self.assertIn('m.inner.querySelector("svg")', html)
+
+    def test_collision_layout_is_inlined(self):
+        html = report.build(payload())
+        for marker in ("batchLayoutWords", "batchThinNames", "neededPPS"):
+            self.assertIn(marker, html)
+
+    def test_word_timing_estimator_is_inlined(self):
+        html = report.build(payload())
+        self.assertIn("wordSegmentsSynced", html)
+
+    def test_state_persists_across_openings(self):
+        html = report.build(payload())
+        self.assertIn("localStorage", html)
+        self.assertIn("music-studio-v1", html)
+
+    def test_theme_toggle_is_wired(self):
+        html = report.build(payload())
+        self.assertIn('id="themebtn"', html)
+        self.assertIn('[data-theme="dark"]', html)
+
+
+class StudioChromeTests(unittest.TestCase):
+    def test_view_pills_offer_all_four_views(self):
+        html = report.build(payload())
+        for label in ("Piano roll", "Guitar tab", "Sheet music",
+                      "Chord chart"):
+            self.assertIn(label, html)
+        self.assertIn('data-view="staff"', html)
+
+    def test_source_pills_only_with_a_voice_transcription(self):
+        html = report.build(payload())
+        self.assertNotIn(">Voice<", html)
+        data = payload()
+        data["stages"]["voice"] = {"notes": [], "chords": []}
+        html = report.build(data)
+        self.assertIn('class="pill spill', html)
+        self.assertIn(">Voice<", html)
+
+    def test_dock_holds_transport_and_karaoke(self):
+        html = report.build(payload())
+        for marker in ('id="playbtn"', 'id="clocknow"', 'id="karaoke"',
+                       'id="ratebtn"'):
+            self.assertIn(marker, html)
+
+    def test_now_playing_card_needs_chords(self):
+        html = report.build(payload())
+        self.assertNotIn("Now playing", html)
+        data = payload()
+        data["stages"]["chords"] = {"chords": PayloadTests.CHORDS}
+        html = report.build(data)
+        self.assertIn("Now playing", html)
+        self.assertIn('id="nowgrip"', html)
+
+    def test_shapes_card_counts_the_song(self):
+        data = payload()
+        data["stages"]["chords"] = {"chords": PayloadTests.CHORDS}
+        html = report.build(data)
+        self.assertIn("Shapes in this song", html)
+        self.assertIn("2 total", html)
+        self.assertIn("<chord-cards", html)
+
+    def test_timed_lyrics_get_the_follow_window(self):
+        data = payload()
+        data["stages"]["lyrics"]["segments"] = [
+            {"start": 7.5, "end": 11.0, "text": "walking down"},
+        ]
+        html = report.build(data)
+        self.assertIn('id="lyricwin"', html)
+
+    def test_untimed_lyrics_still_render_as_plain_text(self):
+        html = report.build(payload())
+        self.assertIn('<pre class="lyrics">', html)
+
+    def test_questions_render_in_their_card(self):
+        html = report.build(payload())
+        self.assertIn("To finish this", html)
+        self.assertIn('class="question"', html)
+
+    def test_about_line_names_the_tools(self):
+        html = report.build(payload())
+        for tool in ("ffmpeg", "Demucs", "allin1", "basic-pitch"):
+            self.assertIn(tool, html)
+
+    def test_design_tokens_and_dark_theme(self):
+        html = report.build(payload())
+        self.assertIn("--c-accent:#b4502e", html)
+        self.assertIn("--c-note:#46607e", html)
+        self.assertIn("--c-accent:#e07a50", html)   # dark accent
+
+    def test_both_libraries_are_inlined(self):
+        html = report.build(payload())
+        self.assertIn("window.ReportLib", html)
+        self.assertIn('customElements.define("score-panel"', html)
+        self.assertIn('customElements.define("song-timeline"', html)
+        self.assertIn('customElements.define("chord-cards"', html)
+        # No external requests: every script is inline.
+        self.assertNotIn("<script src=", html)
 
 
 class NoteRollTests(unittest.TestCase):
-    """The accuracy-first view: every note, its time, its pitch."""
+    """The reference renderer: every note, its time, its pitch."""
 
     EVENTS = [
         {"start": 10.0, "end": 10.4, "midi": 64, "velocity": 90},   # E4 fill
@@ -408,39 +584,50 @@ class NoteRollTests(unittest.TestCase):
         html = report._names_row(events, 4.0, 10.0)
         self.assertLess(html.index("E4"), html.index("C3"))
 
-    def test_view_selector_offers_all_four_views(self):
-        data = payload()
-        data["stages"]["chords"] = {
-            "chords": [
-                {"start": 10.0, "end": 10.9, "symbol": "C",
-                 "shorthand": "x32010",
-                 "positions": [{"string": 5, "fret": 3}]},
+
+class WordTimingTests(unittest.TestCase):
+    """The word-timing reference implementation the JS port mirrors."""
+
+    def test_word_segments_interpolate_inside_a_line(self):
+        segs = [{"start": 10.0, "end": 14.0, "text": "walking down"}]
+        words = report.word_segments(segs)
+        self.assertEqual([w["text"] for w in words], ["walking", "down"])
+        self.assertEqual(words[0]["start"], 10.0)
+        # "walking" is the longer word, so it takes the larger share.
+        self.assertGreater(words[1]["start"], 12.0)
+        self.assertEqual(words[-1]["end"], 14.0)
+
+    def test_word_segments_prefer_real_timestamps(self):
+        segs = [{
+            "start": 10.0, "end": 14.0, "text": "walking down",
+            "words": [
+                {"start": 10.5, "end": 10.9, "text": "walking"},
+                {"start": 12.2, "end": 12.5, "text": "down"},
             ],
-            "notes": self.EVENTS,
-        }
-        html = report.build(data)
-        for label in ("Piano roll", "Guitar tab", "Sheet music",
-                      "Chord chart"):
-            self.assertIn(label, html)
-        self.assertIn('data-view="gtab"', html)
-        self.assertIn("staffwrap", html)
-        # One global switcher in the player bar, not one per section.
-        self.assertEqual(html.count('class="vtabs"'), 1)
+        }]
+        words = report.word_segments(segs)
+        self.assertEqual(words[0]["start"], 10.5)
+        self.assertEqual(words[1]["start"], 12.2)
 
-    def test_timed_lyrics_render_as_seekable_lines_with_karaoke(self):
-        data = payload()
-        data["stages"]["lyrics"]["segments"] = [
-            {"start": 7.5, "end": 11.0, "text": "walking down"},
-            {"start": 12.0, "end": 15.0, "text": "to the water line"},
-        ]
-        html = report.build(data)
-        self.assertIn('class="lline" data-start="7.5"', html)
-        self.assertIn("walking down", html)
-        self.assertIn('id="karaoke"', html)
+    def test_word_segments_snap_to_vocal_onsets(self):
+        # One Whisper line, 10–20s, but the voice stopped singing at 14:
+        # words must spread over the sung span only, and land on attacks.
+        segs = [{"start": 10.0, "end": 20.0, "text": "walking down slow"}]
+        onsets = [10.0, 11.6, 13.4]
+        words = report.word_segments(segs, onsets=onsets)
+        self.assertEqual(words[0]["start"], 10.0)
+        self.assertEqual(words[1]["start"], 11.6)   # snapped to the attack
+        self.assertEqual(words[2]["start"], 13.4)
+        # Nothing drifts into the six seconds of trailing accompaniment.
+        self.assertLessEqual(words[-1]["end"], 14.01)
 
-    def test_untimed_lyrics_still_render_as_plain_text(self):
-        html = report.build(payload())
-        self.assertIn('<pre class="lyrics">', html)
+    def test_word_starts_stay_ordered_after_snapping(self):
+        segs = [{"start": 10.0, "end": 12.0, "text": "a b c d"}]
+        # One attack sits amid the words: neighbours must not reorder.
+        words = report.word_segments(segs, onsets=[10.9])
+        starts = [w["start"] for w in words]
+        self.assertEqual(starts, sorted(starts))
+        self.assertEqual(len(set(starts)), len(starts))
 
     def test_words_align_under_the_roll(self):
         segs = [{"start": 10.0, "end": 14.0, "text": "walking down"}]
@@ -460,29 +647,17 @@ class NoteRollTests(unittest.TestCase):
         html = report._words_row(segs, 8.0, 40.0, times=[10.0, 12.0])
         self.assertIn('style="left:6.0ch"', html)
 
-    def test_words_appear_on_tab_and_staff_charts(self):
-        data = payload()
-        data["stages"]["lyrics"]["segments"] = [
-            {"start": 10.2, "end": 11.5, "text": "walking down"},
+    def test_lines_alternate_lanes(self):
+        segs = [
+            {"start": 10.0, "end": 11.0, "text": "one", "line": 0},
+            {"start": 11.0, "end": 12.0, "text": "two", "line": 1},
         ]
-        data["stages"]["chords"] = {
-            "chords": [
-                {"start": 10.0, "end": 10.9, "symbol": "C",
-                 "shorthand": "x32010",
-                 "positions": [{"string": 5, "fret": 3}]},
-            ],
-            "notes": self.EVENTS,
-        }
-        html = report.build(data)
-        # One aligned words row per surface: roll + each tab variant + staff.
-        self.assertGreaterEqual(html.count('class="words"'), 3)
+        html = report._words_row(segs, 8.0, 40.0)
+        self.assertIn('class="word"', html)
+        self.assertIn('class="word l1"', html)
 
-    def test_info_card_names_the_tools(self):
-        html = report.build(payload())
-        self.assertIn('id="infobtn"', html)
-        for tool in ("ffmpeg", "Demucs", "allin1", "basic-pitch"):
-            self.assertIn(tool, html)
 
+class StaffTests(unittest.TestCase):
     def test_staff_is_a_grand_staff_with_bass_clef(self):
         events = [
             {"start": 10.0, "end": 10.4, "midi": 63},  # Eb4 -> flat, treble
@@ -560,41 +735,6 @@ class NoteRollTests(unittest.TestCase):
         )
         self.assertEqual(svg.count('class="ledger"'), 1)
 
-    def test_staff_wrap_carries_column_coordinates(self):
-        data = payload()
-        data["stages"]["chords"] = {
-            "chords": [
-                {"start": 10.0, "end": 10.9, "symbol": "C",
-                 "shorthand": "x32010",
-                 "positions": [{"string": 5, "fret": 3}]},
-            ],
-            "notes": self.EVENTS,
-        }
-        html = report.build(data)
-        self.assertIn('class="tabwrap staffwrap"', html)
-        self.assertIn("data-xs=", html)
-
-    def test_tab_offers_alternate_positions_with_a_selector(self):
-        # A midrange melody is playable in several neck positions, so the
-        # view carries multiple deduped fingerings and a selector.
-        data = payload()
-        data["stages"]["chords"] = {
-            "chords": [
-                {"start": 10.0, "end": 10.9, "symbol": "C",
-                 "shorthand": "x32010",
-                 "positions": [{"string": 5, "fret": 3}]},
-            ],
-            "notes": [
-                {"start": 10.0, "end": 10.4, "midi": 64},
-                {"start": 10.5, "end": 10.9, "midi": 67},
-                {"start": 11.0, "end": 11.4, "midi": 60},
-            ],
-        }
-        html = report.build(data)
-        self.assertIn('class="posbar"', html)
-        self.assertGreaterEqual(html.count('class="tabvar'), 2)
-        self.assertIn(">5th<", html)
-
     def test_position_seed_moves_the_fingering_up_the_neck(self):
         from music_stack import notes as notes_mod
         events = [{"start": 0.0, "end": 0.5, "midi": 64}]  # E4
@@ -605,34 +745,6 @@ class NoteRollTests(unittest.TestCase):
         self.assertEqual(low[0]["fret"], 0)     # open high E
         self.assertEqual(high[0]["fret"], 9)    # same E4 on the G string
         self.assertEqual(high[0]["string"], 3)
-
-    def test_tab_views_carry_note_times_for_the_playhead(self):
-        data = payload()
-        data["stages"]["chords"] = {
-            "chords": [
-                {"start": 10.0, "end": 10.9, "symbol": "C",
-                 "shorthand": "x32010",
-                 "positions": [{"string": 5, "fret": 3}]},
-            ],
-            "notes": self.EVENTS,
-        }
-        html = report.build(data)
-        self.assertIn('data-times="10.0,10.5,12.0"', html)
-        self.assertIn('class="roll-line tab-line"', html)
-
-    def test_rolls_appear_in_section_panels(self):
-        data = payload()
-        data["stages"]["chords"] = {
-            "chords": [
-                {"start": 10.0, "end": 10.9, "symbol": "C",
-                 "shorthand": "x32010",
-                 "positions": [{"string": 5, "fret": 3}]},
-            ],
-            "notes": self.EVENTS,
-        }
-        html = report.build(data)
-        self.assertIn('class="rollwrap" data-start="6.5"', html)
-        self.assertIn('class="roll-line"', html)
 
 
 if __name__ == "__main__":
