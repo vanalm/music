@@ -523,6 +523,13 @@ class StudioChromeTests(unittest.TestCase):
         for tool in ("ffmpeg", "Demucs", "allin1", "basic-pitch"):
             self.assertIn(tool, html)
 
+    def test_narrow_screens_keep_the_transport_in_reach(self):
+        # On one-column layouts the player card becomes a sticky top bar
+        # instead of sinking below the whole score.
+        html = report.build(payload())
+        self.assertIn('class="card playercard"', html)
+        self.assertIn("order:-1; position:sticky", html)
+
     def test_design_tokens_and_dark_theme(self):
         html = report.build(payload())
         self.assertIn("--c-accent:#b4502e", html)

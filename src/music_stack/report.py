@@ -1890,12 +1890,23 @@ _TEMPLATE = """<!DOCTYPE html>
   }
   audio#player { display:none; }
 
+  /* Narrow: the dock must not vanish below twelve sections of score.
+     The player card floats to the top as a sticky bar — timeline,
+     transport, and karaoke stay in reach — and the reference cards
+     (now playing, lyric, shapes) follow the score. */
   @media (max-width:1020px) {
-    .studio { grid-template-columns:1fr; }
-    aside { border-left:none; border-top:1px solid var(--c-line); }
-    .dock { position:static; max-height:none; }
+    .studio { display:flex; flex-direction:column; }
+    aside, .dock { display:contents; }
+    .dock > * { margin:10px 12px 0; }
+    .playercard {
+      order:-1; position:sticky; top:0; z-index:20; margin:0;
+      border-radius:0 0 14px 14px; border-top:0;
+      border-left:0; border-right:0;
+      box-shadow:0 10px 30px -18px rgb(0 0 0 / .45);
+    }
     section.panel .nowbar { left:-14px; }
-    main { padding:16px 14px 40px; }
+    main { padding:6px 14px 40px; }
+    .about { margin:12px 12px 24px; }
   }
 </style>
 </head>
@@ -1917,7 +1928,7 @@ _TEMPLATE = """<!DOCTYPE html>
 </main>
 <aside>
 <div class="dock">
-<div class="card">
+<div class="card playercard">
 <div id="studio-timeline"><song-timeline></song-timeline></div>
 @@AUDIO@@
 @@AUDIO_NOTE@@
