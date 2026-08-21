@@ -173,9 +173,8 @@ explicitly asks.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-298 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
-when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 306.
+338 tests, no network, no credentials. The ffmpeg round-trips skip themselves
+when ffmpeg is absent, so a fresh checkout is green either way.
 
 `tests/fakes.py` fakes **only the socket** — it reuses the real host allow-list
 check and the real poll loop, so adapter tests exercise the genuine security
@@ -196,7 +195,8 @@ and the fixture together.
 | `src/music_stack/notes.py` | pitch naming, fretboard, scale matching |
 | `src/music_stack/chords.py` | grouping, chord naming, voicings, diagrams |
 | `src/music_stack/musicxml.py` | sheet-music export |
-| `src/music_stack/report.py` | the self-contained HTML report |
+| `src/music_stack/report.py` | the Studio: payload, page chrome, reference renderers |
+| `src/music_stack/assets/` | report-lib.js + score-panel.js, inlined into the page |
 | `src/music_stack/http.py` | the credential boundary |
 | `docs/architecture.md` | why zero-dependency, how the boundary works |
 | `docs/workflow.md` | the songwriting pipeline end to end |

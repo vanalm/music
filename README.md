@@ -72,23 +72,40 @@ projects/kaimana-nights/
 └── report.html     ← the thing to LOOK at — double-click it
 ```
 
-`report.html` is the interactive version — a play-along page, not a printout.
-An audio player whose timeline is the song's actual sections, and under it
-one panel per section that a single switcher flips between **piano roll**
-(every transcribed note, names aligned beneath), **guitar tab** (with a position selector — the audio cannot say which
-string was played, so pick the fingering that fits your hand), **sheet
-music** (grand staff with time signature, bar lines, and beamed
-rhythms read off allin1's beat grid), and the **chord chart** with textbook grips. A
-playhead runs through whichever view is up and flows section to section;
-lyrics are time-synced (karaoke line in the player, clickable lines below);
-speed pills slow the song without changing pitch;
-space bar and arrow keys drive playback; everything clickable seeks;
-⌘-click two spots to loop a passage (esc clears); a plain click moves the playhead
-without starting playback; ⌥-click a note to hear it, ⌥-click beside
-the notes to hear the whole moment, ⌥-drag to play through the notes; hold ⌥ for a per-section
-▶ tones button that plays the transcription back as synth at tempo. One
+`report.html` is **the Studio** — a two-pane practice room, not a printout.
+The score fills the left side: one panel per section, and a single switcher
+flips every panel between **piano roll** (every transcribed note, names
+aligned beneath), **guitar tab** (with a position selector — the audio
+cannot say which string was played, so pick the fingering that fits your
+hand), **sheet music** (grand staff with time signature, bar lines, and
+beamed rhythms read off allin1's beat grid), and the **chord chart** with
+textbook grips. An **Instrument | Voice** toggle flips the same charts
+between what was played and what was sung. The right side is a sticky
+practice dock: the section timeline and transport, speed pills that slow
+the song without changing pitch, the chord under your hand right now with
+its grip and what's next, a lyric window that follows playback, and every
+shape in the song. Lyrics ride each chart **word by word** at the moment
+they're sung; a playhead runs through whichever view is up and flows
+section to section.
+
+Everything is playable by hand: space and arrow keys drive playback,
+everything clickable seeks, a plain click moves the playhead without
+starting playback, **dragging scrubs the recording** through the exact
+spot under the pointer, ⌘-click two spots loops a passage (esc clears),
+⌥-click a note (or a moment) to hear it, and each section's **▶ tones**
+button plays its transcription back as synth at tempo. Light and dark
+themes; your view, speed, theme, and position survive reopening. One
 self-contained file — audio embedded — so you can mail it to a bandmate.
 Regenerate any time with `music-stack report <slug>`.
+
+It is deliberately **plain HTML + vanilla JS, not React** — the report is
+an artifact, not an app. It must open from a double-click on `file://`, on
+an aeroplane, on a bandmate's laptop with nothing installed, and still
+work in ten years. A framework would mean a build step, a runtime
+dependency, and a bundle to go stale — the exact failure modes this
+project exists to avoid. Web components give it real componentization
+anyway; the reasoning is spelled out in
+[docs/architecture.md](docs/architecture.md).
 
 Paste `brief.md` into a chat and you are working on the song, not the tooling.
 
@@ -136,6 +153,23 @@ or `whisper` and adapts — no need to install another.
 
 If Demucs is present, lyrics are transcribed from the **isolated vocal stem**
 rather than the full mix, which is markedly more accurate.
+
+## Bring your own stems
+
+Already separated the song with Moises, Suno, or anything else? Drop the
+files into the project and re-run — they are used **instead of** running
+demucs, and a cleaner separation improves everything downstream (lyrics,
+the sung-melody views, chords):
+
+```bash
+mkdir -p projects/<slug>/stems/user
+cp ~/Downloads/my-moises-export/*.wav projects/<slug>/stems/user/
+music-stack analyze --input projects/<slug>/input/<original>
+```
+
+Common naming dialects are recognised automatically: vocals / vocal / vox
+for the voice, other / instrumental / guitars / no_vocals for the
+instruments.
 
 ## Working out a lick
 
@@ -234,12 +268,38 @@ disk.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-298 tests, no network, no credentials. Eight ffmpeg round-trips skip themselves
-when ffmpeg is absent, so a fresh checkout is green and a bootstrapped machine
-runs 306.
+338 tests, no network, no credentials. The ffmpeg round-trips skip themselves
+when ffmpeg is absent, so a fresh checkout is green either way.
 
 The hosted-service tests are fully mocked — they verify this code's logic, not
 vendor behaviour. **No live API call has ever been made from this repository.**
+
+## Extending it
+
+The seams are deliberate; each has a short recipe in
+[CLAUDE.md](CLAUDE.md):
+
+- **A new analysis stage** — register the external tool in
+  `local_tools.TOOLS` with an install hint, build its argv in a
+  `*_command()` function (so `--dry-run` can print it), wire it into
+  `brief.analyze()` guarded by `.which()` so absence skips instead of
+  failing, and test the argv — that's the contract with the tool.
+- **A new report view** — charts render client-side in
+  `src/music_stack/assets/`. Add the renderer to `report-lib.js` as a port
+  of a tested Python reference implementation in `report.py` (behaviour
+  changes start in Python, in a test), add a branch to `score-panel.js`,
+  and a pill to the control row in `report.py`. Setting the panel's
+  `_seq = {times, xs, mids}` buys the playhead, click-to-seek, ⌥ audition,
+  looping, and lyric alignment for free.
+- **A new hosted service** — new module in `adapters/` with its own
+  `ALLOWED_HOSTS`, every request through `http.api_request` (never raw
+  urllib), and a round-trip test proving the credential never reaches a
+  storage host. Unconfirmed endpoint paths are declared
+  `verified=False`.
+
+House rules that keep it maintainable: **zero runtime dependencies in the
+core** (optional extras only), **never widen a credential allow-list** to
+fix an error, **secrets are never printed**, and `input/` is write-once.
 
 ## Documentation
 

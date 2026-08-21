@@ -7,6 +7,13 @@ cli.py            argparse surface; one command group per stage
 ├── config.py     .env + environment, credential presence, never values
 ├── audio.py      ffmpeg / ffprobe subprocess wrappers
 ├── projects.py   per-song directory scaffolding + job audit trail
+├── brief.py      the analyze pipeline; brief.md rendering
+├── local_tools.py  external ML tool detection and argv building
+├── notes.py      pitch naming, fretboard, fingering, scale matching
+├── chords.py     grouping, chord naming, voicings, diagrams
+├── musicxml.py   sheet-music export
+├── report.py     the Studio: payload + page chrome + reference renderers
+├── assets/       report-lib.js, score-panel.js — inlined into the page
 ├── http.py       the only place a socket is opened
 └── adapters/
     ├── music_ai.py   api.music.ai
@@ -36,6 +43,58 @@ reason outside this repository.
 
 Vendor SDKs stay available under the `vendor` extra for anyone who wants
 them. The CLI does not import them, so an SDK breaking cannot break the CLI.
+
+## The report: one HTML file, no framework
+
+`report.html` — the Studio — is plain HTML, CSS custom properties, and
+vanilla JS in one self-contained file. React (or any framework) was
+considered and rejected, for reasons that mirror the zero-dependency rule
+above:
+
+**The report is an artifact, not an app.** It gets double-clicked from
+Finder, opened over `file://`, mailed to a bandmate, and reopened years
+later next to the demo it describes. An artifact must not depend on a dev
+server, a CDN, or anything installed on the reader's machine. A framework
+page needs either a network request (breaks on an aeroplane, breaks when
+a CDN moves, violates "nothing leaves the machine") or a bundler (a build
+toolchain — node, npm, lockfiles — bolted onto a package whose entire
+install story is "standard library only").
+
+**Longevity beats ergonomics.** The most likely way a generated file
+breaks in five years is the same way a package breaks: a dependency
+moved. Browsers keep old HTML/JS working essentially forever; framework
+major versions do not. A report generated today must still open when the
+song finally gets finished.
+
+**The framework's job is already small here.** The page has exactly one
+producer (the generator) and its state is one song. What React would buy
+— components, declarative updates — is covered by ~700 lines of vanilla
+code: three **custom elements** (`<score-panel>`, `<song-timeline>`,
+`<chord-cards>` in `assets/score-panel.js`) provide the componentization,
+and a cheap `update(t)` per animation frame provides the reactivity. No
+virtual DOM is needed to move a playhead.
+
+How it fits together, so a change lands in the right place:
+
+1. **`report.py` emits data, not charts**: one inline `window.SONG`
+   payload (sections, beat grid, chords with fingerings, notes as
+   `[start, end, midi, velocity]` rows, word-timed lyrics) plus the
+   static page chrome.
+2. **`assets/report-lib.js`** renders the charts from the payload. Its
+   functions are line-for-line ports of the Python reference
+   implementations that stay in `report.py` — the musical behaviour
+   (grouping windows, engraving rules, word-timing heuristics) is
+   defined and *tested* in Python first, then mirrored.
+3. **`assets/score-panel.js`** wraps the renderers in custom elements
+   that own their interactions (click-to-seek, drag-scrub, ⌘-click loop
+   points, ⌥ audition) and emit plain CustomEvents.
+4. A small inline **app script** adapts the real `<audio>` element to
+   those events: transport, speed with pitch preserved, per-section
+   tones, theme, and state persistence (localStorage).
+
+The JS ships inside the Python package (`[tool.setuptools.package-data]`)
+and is inlined verbatim at build time, so the one-file, works-offline
+property is preserved end to end.
 
 ## The credential boundary
 
