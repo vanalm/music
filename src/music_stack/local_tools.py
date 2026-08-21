@@ -318,18 +318,21 @@ def lyrics_command(path, out_dir, *, model="small", language=None,
 
     if kind == "mlx":
         # mlx_whisper takes dashed flags, and its --model is a Hub repo or
-        # local directory rather than a size name.
+        # local directory rather than a size name. Word timestamps let the
+        # report place each word at the moment it is sung.
         if model and "/" not in model and not os.path.exists(model):
             model = MLX_WHISPER_REPO.format(model)
         argv = [binary, path, "--model", model,
-                "--output-dir", out_dir, "--output-format", "all"]
+                "--output-dir", out_dir, "--output-format", "all",
+                "--word-timestamps", "True"]
         if language:
             argv += ["--language", language]
         return argv
 
     # openai-whisper: underscore flags, bare size names.
     argv = [binary, path, "--model", model,
-            "--output_dir", out_dir, "--output_format", "all"]
+            "--output_dir", out_dir, "--output_format", "all",
+            "--word_timestamps", "True"]
     if language:
         argv += ["--language", language]
     return argv
@@ -365,6 +368,14 @@ def lyrics(path, out_dir, *, model="small", language=None, dry_run=False):
         p for p in out_dir.iterdir()
         if p.is_file() and p.suffix in TRANSCRIPT_SUFFIXES
     )
+    # Every Whisper variant names outputs after the input's stem. Keep
+    # only this run's files: the directory can hold transcripts from an
+    # earlier run over a different source (a re-analysis that switched
+    # from the full mix to a dropped-in vocal stem), and a stale one
+    # sorting first would silently win downstream.
+    own = [p for p in produced if p.stem == Path(path).stem]
+    if own:
+        produced = own
     if not produced:
         raise MusicStackError(
             "Whisper finished but wrote nothing to {}.".format(out_dir)
@@ -399,11 +410,27 @@ def read_transcript_segments(paths):
                 start, end = float(s["start"]), float(s["end"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if text:
-                segments.append(
-                    {"start": round(start, 2), "end": round(end, 2),
+            if not text:
+                continue
+            entry = {"start": round(start, 2), "end": round(end, 2),
                      "text": text}
-                )
+            # Word-level timings, when Whisper produced them (the argv asks
+            # for them): the report aligns each word with its sung moment.
+            words = []
+            for w in s.get("words") or []:
+                wtext = (w.get("word") or w.get("text") or "").strip()
+                try:
+                    w0, w1 = float(w["start"]), float(w["end"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if wtext:
+                    words.append(
+                        {"start": round(w0, 2), "end": round(w1, 2),
+                         "text": wtext}
+                    )
+            if words:
+                entry["words"] = words
+            segments.append(entry)
         if segments:
             return segments
     for p in paths:

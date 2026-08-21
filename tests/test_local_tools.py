@@ -11,6 +11,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from music_stack import local_tools
 from music_stack.errors import AudioError, MusicStackError
@@ -93,6 +94,7 @@ class CommandBuildingTests(unittest.TestCase):
             [
                 "whisper", "v.wav", "--model", "medium",
                 "--output_dir", "out/", "--output_format", "all",
+                "--word_timestamps", "True",
                 "--language", "en",
             ],
         )
@@ -114,6 +116,7 @@ class CommandBuildingTests(unittest.TestCase):
                 "mlx_whisper", "v.wav",
                 "--model", "mlx-community/whisper-small-mlx",
                 "--output-dir", "out/", "--output-format", "all",
+                "--word-timestamps", "True",
                 "--language", "en",
             ],
         )
@@ -157,6 +160,38 @@ class DryRunTests(unittest.TestCase):
     def test_dry_run_still_validates_the_input_exists(self):
         with self.assertRaises(AudioError):
             local_tools.stems("/nope/missing.wav", "/tmp/out", dry_run=True)
+
+
+class LyricsRunTests(unittest.TestCase):
+    def test_only_this_runs_transcripts_are_returned(self):
+        """A re-analysis that switched sources must not read stale files.
+
+        The lyrics dir can hold transcripts from an earlier run over a
+        different source (full mix vs a dropped-in vocal stem); the stale
+        one can sort first and would silently win downstream.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            source = wav(tmp)  # e.g. <tmp>/take.wav
+            out_dir = os.path.join(tmp, "lyrics")
+            os.makedirs(out_dir)
+            stale = os.path.join(out_dir, "a-previous-mix.json")
+            with open(stale, "w") as fh:
+                fh.write("{}")
+
+            def fake_run(argv, cwd=None):
+                stem = Path(source).stem
+                for suffix in (".json", ".txt"):
+                    with open(os.path.join(out_dir, stem + suffix), "w") as fh:
+                        fh.write("{}")
+
+            with mock.patch.object(
+                local_tools, "find_whisper",
+                return_value=("mlx_whisper", "mlx_whisper", "mlx"),
+            ), mock.patch.object(local_tools, "_run", fake_run):
+                stage = local_tools.lyrics(source, out_dir)
+        names = [Path(f).name for f in stage["files"]]
+        self.assertNotIn("a-previous-mix.json", names)
+        self.assertEqual(len(names), 2)
 
 
 class StructureSummaryTests(unittest.TestCase):
@@ -245,6 +280,23 @@ class TranscriptSegmentTests(unittest.TestCase):
 
     def test_no_timing_anywhere_is_empty(self):
         self.assertEqual(local_tools.read_transcript_segments([]), [])
+
+    def test_word_timestamps_ride_along_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "v.json")
+            with open(path, "w") as fh:
+                json.dump({"text": "hi", "segments": [
+                    {"start": 1.0, "end": 3.0, "text": " hi there ",
+                     "words": [
+                         {"start": 1.1, "end": 1.4, "word": " hi"},
+                         {"start": 2.0, "end": 2.6, "word": " there"},
+                     ]},
+                ]}, fh)
+            segs = local_tools.read_transcript_segments([path])
+        self.assertEqual(segs[0]["words"], [
+            {"start": 1.1, "end": 1.4, "text": "hi"},
+            {"start": 2.0, "end": 2.6, "text": "there"},
+        ])
 
 
 class BeatGridTests(unittest.TestCase):

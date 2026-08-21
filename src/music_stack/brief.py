@@ -21,6 +21,48 @@ from . import audio, local_tools, projects
 #: Sections a conventional song usually has. Absence is a prompt, not a verdict.
 EXPECTED_SECTIONS = ("intro", "verse", "chorus", "bridge", "outro")
 
+#: Filename hints for recognising a stem whatever tool separated it —
+#: demucs says "vocals"/"other", Moises says "vocals"/"guitars",
+#: Suno and friends say "vocal"/"instrumental". Order is priority.
+STEM_HINTS = {
+    "vocals": ("vocals", "vocal", "voice", "vox", "lead"),
+    "instrumental": ("other", "instrumental", "instruments",
+                     "accompaniment", "no_vocals", "no-vocals", "backing",
+                     "guitars", "guitar", "piano", "keys"),
+}
+
+AUDIO_SUFFIXES = (".wav", ".aif", ".aiff", ".flac", ".mp3", ".m4a", ".ogg")
+
+
+def pick_stem(files, kind):
+    """The file in *files* that looks like *kind* by name, or ``None``.
+
+    ``kind`` is a :data:`STEM_HINTS` key. Hints are tried in priority
+    order so a folder holding both ``other.wav`` and ``guitar.wav``
+    yields the conventional pick.
+    """
+    for hint in STEM_HINTS[kind]:
+        for f in files or []:
+            if hint in Path(f).stem.lower().replace(" ", "_"):
+                return f
+    return None
+
+
+def user_stems(project_dir):
+    """Stems the user separated elsewhere — Moises, Suno, anything.
+
+    Audio files dropped into ``<project>/stems/user/`` are used instead
+    of running demucs, so a cleaner hosted separation can feed every
+    downstream stage (lyrics, voice trace, chords).
+    """
+    stem_dir = Path(project_dir) / "stems" / "user"
+    if not stem_dir.is_dir():
+        return []
+    return sorted(
+        str(p) for p in stem_dir.iterdir()
+        if p.suffix.lower() in AUDIO_SUFFIXES
+    )
+
 
 def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
     """Run the whole local pipeline over *input_path*. Returns a result dict."""
@@ -84,10 +126,19 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
         result["stages"]["structure"] = stage
 
     # -- 4. stems ---------------------------------------------------------
-    vocal_stem = None
-    if "stems" in skip or not local_tools.TOOLS["demucs"].which():
+    # Your own separation wins: files dropped into stems/user/ (from
+    # Moises, Suno, anywhere) are used as-is instead of running demucs —
+    # a cleaner hosted split improves every stage downstream.
+    provided = user_stems(project_dir)
+    if provided:
+        log("using your stems from stems/user/ ({})".format(
+            ", ".join(Path(p).name for p in provided)
+        ))
+        result["stages"]["stems"] = {"files": provided, "source": "user"}
+    elif "stems" in skip or not local_tools.TOOLS["demucs"].which():
         result["skipped"].append("stems")
-        log("skipping stems (demucs not installed)")
+        log("skipping stems (demucs not installed — or drop your own "
+            "separations into {}/stems/user/)".format(project_dir))
     else:
         log("separating stems… (this is the slow one)")
         out = project_dir / "stems" / "local"
@@ -95,10 +146,8 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
             working, out, device=local_tools.detect_device(), dry_run=dry_run
         )
         result["stages"]["stems"] = stage
-        for path in stage.get("files", []):
-            if Path(path).stem == "vocals":
-                vocal_stem = path
-                break
+    stem_files = (result["stages"].get("stems") or {}).get("files", [])
+    vocal_stem = pick_stem(stem_files, "vocals")
 
     # -- 5. lyrics --------------------------------------------------------
     # Transcribe the isolated vocal when we have one: a separated stem gives a
@@ -129,11 +178,7 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
         result["skipped"].append("chords")
         log("skipping chords (basic-pitch not installed)")
     else:
-        instrumental = None
-        for path in (result["stages"].get("stems") or {}).get("files", []):
-            if Path(path).stem == "other":
-                instrumental = path
-                break
+        instrumental = pick_stem(stem_files, "instrumental")
         source = instrumental or working
         log(
             "transcribing chords from {}…".format(
@@ -154,6 +199,28 @@ def analyze(root, input_path, *, title=None, skip=(), dry_run=False, log=print):
             # A failed transcription costs one section, never the brief.
             result["skipped"].append("chords")
             log("chord transcription failed, continuing: {}".format(exc))
+
+    # -- 6b. voice: the sung melody, transcribed like the instruments -----
+    # The same basic-pitch pass, pointed at the isolated vocal, so the
+    # report can show the melody as piano roll, tab, and sheet music and
+    # toggle between what was played and what was sung.
+    if "voice" in skip:
+        result["skipped"].append("voice")
+    elif vocal_stem and local_tools.TOOLS["basic-pitch"].which():
+        log("transcribing the sung melody from the vocal stem…")
+        try:
+            stage = local_tools.notes(
+                vocal_stem, project_dir / "notes" / "voice", dry_run=dry_run
+            )
+            stage["transcribed"] = str(vocal_stem)
+            if not dry_run:
+                stage["notes"] = detect_notes(stage.get("note_events"))
+                stage["chords"] = detect_chords(stage.get("note_events"))
+            result["stages"]["voice"] = stage
+        except Exception as exc:
+            # Like chords: a failed transcription never costs the brief.
+            result["skipped"].append("voice")
+            log("voice transcription failed, continuing: {}".format(exc))
 
     if dry_run:
         return result

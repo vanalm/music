@@ -47,6 +47,45 @@ FULL_STRUCTURE = {
 }
 
 
+class UserStemTests(unittest.TestCase):
+    """Stems separated elsewhere (Moises, Suno…) drop into stems/user/."""
+
+    def test_user_stems_found_and_sorted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stem_dir = Path(tmp) / "stems" / "user"
+            stem_dir.mkdir(parents=True)
+            for name in ("vocals.mp3", "guitars.wav", "notes.txt"):
+                (stem_dir / name).write_bytes(b"")
+            files = brief.user_stems(tmp)
+        names = [Path(f).name for f in files]
+        self.assertEqual(names, ["guitars.wav", "vocals.mp3"])
+
+    def test_no_user_dir_is_empty_not_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(brief.user_stems(tmp), [])
+
+    def test_pick_stem_recognises_tool_dialects(self):
+        moises = ["bass.wav", "drums.wav", "guitars.wav", "vocals.wav"]
+        self.assertEqual(brief.pick_stem(moises, "vocals"), "vocals.wav")
+        self.assertEqual(brief.pick_stem(moises, "instrumental"),
+                         "guitars.wav")
+        suno = ["My Song (Vocals).m4a", "My Song (Instrumental).m4a"]
+        self.assertEqual(brief.pick_stem(suno, "vocals"),
+                         "My Song (Vocals).m4a")
+        self.assertEqual(brief.pick_stem(suno, "instrumental"),
+                         "My Song (Instrumental).m4a")
+
+    def test_pick_stem_prefers_the_conventional_name(self):
+        # demucs output holds both "other" and nothing else guitar-like;
+        # "other" outranks later hints.
+        files = ["drums.wav", "guitar.wav", "other.wav"]
+        self.assertEqual(brief.pick_stem(files, "instrumental"), "other.wav")
+
+    def test_pick_stem_none_when_nothing_matches(self):
+        self.assertIsNone(brief.pick_stem(["drums.wav"], "vocals"))
+        self.assertIsNone(brief.pick_stem([], "instrumental"))
+
+
 class RenderTests(unittest.TestCase):
     def test_includes_tempo_arrangement_and_table(self):
         out = brief.render(result_with(structure=FULL_STRUCTURE))
