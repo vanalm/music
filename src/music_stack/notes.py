@@ -145,14 +145,17 @@ def guitar_positions(midi, strings=TOP_THREE, tuning=None, max_fret=MAX_FRET):
 def choose_positions(events, strings=TOP_THREE, tuning=None, prefer_fret=None):
     """Pick one playable position per note, keeping the hand in one place.
 
-    A greedy pass that prefers the fret nearest the previous note's fret. It is
-    not a full fingering optimiser, but for a short single-position lick it
-    lands where a player's hand would actually be.
-
-    ``prefer_fret`` seeds where the hand starts: the first note is taken
-    nearest that fret and the hand drifts from there. Different seeds give
-    the same notes in different neck positions — none of them is "the"
-    fingering, because the audio cannot say which string was played.
+    A greedy pass over a sticky four-fret hand window. ``prefer_fret``
+    seeds where the window sits; notes inside the window (index finger one
+    fret back, pinky four ahead) are free, and the window shifts only when
+    a note is unreachable — and then minimally, the way a hand actually
+    moves. Open strings are reachable from *any* position, so they never
+    drag the window: an anchor that simply followed the previous note's
+    fret collapsed to the nut at the first open string, and a "5th
+    position" tab stayed there only for its opening notes. Different
+    seeds give the same notes in different neck positions — none of them
+    is "the" fingering, because the audio cannot say which string was
+    played.
     """
     chosen = []
     anchor = prefer_fret
@@ -163,9 +166,23 @@ def choose_positions(events, strings=TOP_THREE, tuning=None, prefer_fret=None):
             continue
         if anchor is None:
             pick = options[0]
+            if pick["fret"]:
+                anchor = pick["fret"]
         else:
-            pick = min(options, key=lambda p: (abs(p["fret"] - anchor), p["fret"]))
-        anchor = pick["fret"]
+            lo, hi = anchor - 1, anchor + 4
+
+            def reach(p):
+                fret = p["fret"]
+                if fret == 0 or lo <= fret <= hi:
+                    away = 0
+                else:
+                    away = lo - fret if fret < lo else fret - hi
+                return (away, abs(fret - anchor), fret)
+
+            pick = min(options, key=reach)
+            fret = pick["fret"]
+            if fret and not (lo <= fret <= hi):
+                anchor = fret - 4 if fret > hi else fret + 1
         chosen.append({**e, "string": pick["string"], "fret": pick["fret"]})
     return chosen
 

@@ -127,6 +127,28 @@ class FingeringTests(unittest.TestCase):
         chosen = notes.choose_positions([{"start": 0, "end": 1, "midi": 45}])
         self.assertIsNone(chosen[0]["string"])
 
+    def test_seeded_position_survives_a_low_note(self):
+        """An unavoidable low note must not collapse the hand to the nut.
+
+        E4 · E2 · E4 seeded at the 9th: E2 exists only as the open sixth
+        string, and with a drifting anchor the closing E4 used to fall
+        back to the open first string — a "9th position" tab that left
+        9th position after its first note.
+        """
+        events = [{"start": i * 0.5, "end": i * 0.5 + 0.2, "midi": m}
+                  for i, m in enumerate([64, 40, 64])]
+        chosen = notes.choose_positions(
+            events, strings=tuple(range(1, 7)), prefer_fret=9
+        )
+        self.assertEqual(chosen[0]["fret"], 9)     # G string, 9th
+        self.assertEqual(chosen[1]["fret"], 0)     # open low E, unavoidable
+        self.assertEqual(chosen[2]["fret"], 9)     # the hand never left
+
+    def test_open_string_is_still_used_when_the_hand_is_low(self):
+        events = [{"start": 0, "end": 0.2, "midi": 64}]
+        chosen = notes.choose_positions(events, strings=tuple(range(1, 7)))
+        self.assertEqual(chosen[0], {**events[0], "string": 1, "fret": 0})
+
 
 class TabTests(unittest.TestCase):
     def test_renders_three_string_labels(self):
