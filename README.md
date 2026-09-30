@@ -178,6 +178,20 @@ Common naming dialects are recognised automatically: vocals / vocal / vox
 for the voice, other / instrumental / guitars / no_vocals for the
 instruments.
 
+## Changing key
+
+```bash
+music-stack transpose part-of-the-deal --semitones -2
+```
+
+Sing it where your voice lives: this writes a key-shifted twin of the
+project — the audio pitch-shifted with the tempo untouched (Rubber Band
+when your ffmpeg has it, a resample+`atempo` chain otherwise), every
+chord symbol, note, and fingering transposed to match, and a full Studio
+for the new key with the shifted audio embedded and downloadable from
+the dock's ⬇. Nothing is re-analyzed and the original project is not
+touched. `--title "Part Of The Deal (Gm)"` names the new project.
+
 ## Working out a lick
 
 ```bash
@@ -240,6 +254,7 @@ sixteenth grid, so swing and rubato notate squarer than you played.
 | `analyze --input F` | **everything, one pass** | free |
 | `watch` | drop folder — drag files in from Finder | free |
 | `report <slug>` | regenerate a project's report.html | free |
+| `transpose <slug> --semitones N` | key-shifted twin: audio + charts + Studio | free |
 | `lick --input F --start T --end T` | notes, chords, tab, scale, score | free |
 | `doctor` / `local doctor` | what is installed and configured | free |
 | `project new/list` | song folders | free |
@@ -275,7 +290,7 @@ disk.
 PYTHONPATH=src:tests python3 -m unittest discover -s tests
 ```
 
-338 tests, no network, no credentials. The ffmpeg round-trips skip themselves
+349 tests, no network, no credentials. The ffmpeg round-trips skip themselves
 when ffmpeg is absent, so a fresh checkout is green either way.
 
 The hosted-service tests are fully mocked — they verify this code's logic, not

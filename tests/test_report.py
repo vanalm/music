@@ -756,3 +756,10 @@ class StaffTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DownloadButtonTests(unittest.TestCase):
+    def test_transport_offers_the_audio_as_a_download(self):
+        html = report.build(payload())
+        self.assertIn('id="dlbtn"', html)
+        self.assertIn("dlBtn.download", html)

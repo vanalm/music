@@ -189,6 +189,83 @@ def cmd_report(args, settings):
     return 0
 
 
+# -- transpose -------------------------------------------------------------
+
+
+def cmd_transpose(args, settings):
+    """A key-shifted twin of a project: audio, charts, and Studio.
+
+    The audio is pitch-shifted with the tempo untouched (Rubber Band via
+    ffmpeg when available), and the analysis is transposed to match — so
+    the new project's Studio shows the chords and notes you actually play
+    in the new key, against audio you can sing to. Nothing is re-analyzed
+    and nothing about the original project changes.
+    """
+    from . import brief as brief_mod
+    from . import report as report_mod
+
+    src_dir = settings.projects_dir / args.slug
+    data_path = src_dir / "brief.json"
+    if not data_path.exists():
+        print(
+            "error: {} has no brief.json — run `music-stack analyze` on it "
+            "first.".format(args.slug), file=sys.stderr,
+        )
+        return 2
+    result = json.loads(data_path.read_text(encoding="utf-8"))
+    norm = (result.get("stages") or {}).get("normalize") or {}
+    src_audio = norm.get("file")
+    if not src_audio or not Path(src_audio).exists():
+        print(
+            "error: {} has no normalized audio to shift.".format(args.slug),
+            file=sys.stderr,
+        )
+        return 2
+
+    semitones = args.semitones
+    sign = "+" if semitones >= 0 else "−"
+    title = args.title or "{} ({}{} st)".format(
+        result.get("title", args.slug), sign, abs(semitones)
+    )
+    project_dir = projects.create(
+        settings.projects_dir, title, exist_ok=args.overwrite
+    )
+    slug = project_dir.name
+
+    dest_audio = project_dir / "normalized" / "{}-48k-24bit.wav".format(slug)
+    print(
+        "shifting audio {}{} semitone{}… ({})".format(
+            sign, abs(semitones), "" if abs(semitones) == 1 else "s",
+            "rubberband" if audio.has_rubberband() else "asetrate+atempo",
+        )
+    )
+    audio.transpose(
+        src_audio, dest_audio, semitones=semitones, overwrite=args.overwrite
+    )
+
+    shifted = brief_mod.transpose_result(
+        result, semitones, title=title, slug=slug, project=str(project_dir)
+    )
+    norm_stage = shifted["stages"].setdefault("normalize", {})
+    norm_stage["file"] = str(dest_audio)
+    norm_stage["summary"] = audio.inspect(dest_audio)["summary"]
+
+    shifted["brief"] = brief_mod.render(shifted)
+    (project_dir / "brief.md").write_text(
+        shifted["brief"], encoding="utf-8"
+    )
+    (project_dir / "brief.json").write_text(
+        json.dumps(brief_mod._serialisable(shifted), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    report_path = report_mod.write(
+        shifted, project_dir, audio_path=dest_audio
+    )
+    print("Audio:  {}  (download/keep this file)".format(dest_audio))
+    print("Studio: {}  (double-click to open)".format(report_path))
+    return 0
+
+
 # -- lick -----------------------------------------------------------------
 
 
@@ -625,6 +702,24 @@ def build_parser():
     rep = sub.add_parser("report", help="regenerate a project's brief.html")
     rep.add_argument("slug", help="project folder name under projects/")
     rep.set_defaults(func=cmd_report)
+
+    trans = sub.add_parser(
+        "transpose",
+        help="a key-shifted twin of a project: audio + charts + Studio",
+    )
+    trans.add_argument("slug", help="project folder name under projects/")
+    trans.add_argument(
+        "--semitones", type=int, required=True,
+        help="signed shift, e.g. -2 to go from Am to Gm",
+    )
+    trans.add_argument(
+        "--title", help="title for the new project (default: '<title> (±N st)')"
+    )
+    trans.add_argument(
+        "--overwrite", action="store_true",
+        help="replace an existing transposed project of the same name",
+    )
+    trans.set_defaults(func=cmd_transpose)
 
     lick = sub.add_parser(
         "lick", help="what notes are in this phrase? (trim, transcribe, tab)"

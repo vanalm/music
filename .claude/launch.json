@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vocal-compass",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": ["-c", "cd /Users/jacobvanalmelo/code/vocal-compass && exec npm run dev"],
+      "port": 5199
+    },
+    {
+      "name": "vocal-compass-api",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": ["-c", "cd /Users/jacobvanalmelo/code/vocal-compass && exec npm run api"],
+      "port": 8799,
+      "url": "http://localhost:8799"
+    }
+  ]
+}

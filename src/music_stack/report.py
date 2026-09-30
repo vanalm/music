@@ -1281,6 +1281,19 @@ _APP_JS = r"""
       });
     }
   }
+  // The audio travels with the page; the ⬇ hands it back as a file —
+  // which is how a transposed version gets carried to a phone or a DAW.
+  // Wired at boot, once SONG is loaded and can name the file.
+  function wireDownload() {
+    var dlBtn = document.getElementById("dlbtn");
+    var dlSrc = audio && (audio.getAttribute("src") || audio.currentSrc);
+    if (!dlBtn || !dlSrc) return;
+    dlBtn.href = dlSrc;
+    var isData = dlSrc.indexOf("data:") === 0;
+    dlBtn.download = ((SONG && SONG.title) || "song") +
+      (isData ? ".m4a" : "");
+    dlBtn.hidden = false;
+  }
   document.addEventListener("sp-seek", function (e) {
     if (audio) audio.currentTime = e.detail.t;
   });
@@ -1597,6 +1610,7 @@ _APP_JS = r"""
     L.loadSong().then(function (song) {
       SONG = song;
       applyPanes();
+      wireDownload();
       var r0 = saved.rate && RATES.indexOf(saved.rate) >= 0 ? saved.rate : 1;
       setRate(r0);
       if (audio && saved.t && isFinite(saved.t) && SONG.duration) {
@@ -1822,6 +1836,12 @@ _TEMPLATE = """<!DOCTYPE html>
     color:var(--c-muted); border-radius:8px; padding:4px 10px;
     font:600 11px var(--f-sans); cursor:pointer;
   }
+  #dlbtn {
+    border:1px solid var(--c-line); color:var(--c-muted);
+    border-radius:8px; padding:4px 9px; font:600 12px var(--f-sans);
+    text-decoration:none; flex:none;
+  }
+  #dlbtn:hover { border-color:var(--c-accent); color:var(--c-accent); }
   #ratemenu { margin-top:10px; padding-top:10px;
     border-top:1px solid var(--c-line); }
   .ratepills { display:flex; gap:5px; margin-top:7px; flex-wrap:wrap; }
@@ -1936,6 +1956,7 @@ _TEMPLATE = """<!DOCTYPE html>
 <button id="playbtn" type="button" title="space">▶</button>
 <div id="clocknow">0:00</div>
 <button id="ratebtn" type="button">1× · keys ▾</button>
+<a id="dlbtn" hidden download title="Download this version's audio">⬇</a>
 </div>
 <div id="ratemenu" hidden>
 <div class="dhead">Speed — same pitch, slower song</div>

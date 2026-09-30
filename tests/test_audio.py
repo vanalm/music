@@ -120,3 +120,44 @@ class ConversionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TransposeCommandTests(unittest.TestCase):
+    """The argv is the contract; pitch must move while tempo stays."""
+
+    def test_rubberband_route(self):
+        argv = audio.transpose_command(
+            "in.wav", "out.wav", semitones=-2, rubberband=True
+        )
+        joined = " ".join(argv)
+        self.assertIn("-af", argv)
+        self.assertIn("rubberband=pitch=0.8908987181", joined)
+        self.assertNotIn("atempo", joined)
+        self.assertEqual(argv[-1], "out.wav")
+
+    def test_fallback_route_detunes_then_corrects_tempo(self):
+        argv = audio.transpose_command(
+            "in.wav", "out.wav", semitones=-2, rubberband=False, rate=48000
+        )
+        af = argv[argv.index("-af") + 1]
+        # asetrate drops pitch AND tempo; atempo stretches tempo back.
+        self.assertIn("asetrate=42763", af)
+        self.assertIn("aresample=48000", af)
+        self.assertIn("atempo=1.1224620483", af)
+
+    def test_up_shift_inverts_both_factors(self):
+        af_arg = audio.transpose_command(
+            "in.wav", "out.wav", semitones=2, rubberband=False, rate=48000
+        )
+        af = af_arg[af_arg.index("-af") + 1]
+        self.assertIn("asetrate=53878", af)
+        self.assertIn("atempo=0.8908987181", af)
+
+    def test_transpose_refuses_existing_dest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "a.wav")
+            dest = os.path.join(tmp, "b.wav")
+            pathlib.Path(src).write_bytes(b"RIFF")
+            pathlib.Path(dest).write_bytes(b"RIFF")
+            with self.assertRaises(AudioError):
+                audio.transpose(src, dest, semitones=-2)

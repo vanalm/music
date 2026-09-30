@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import audio, local_tools, projects
+from .notes import note_name
 
 #: Sections a conventional song usually has. Absence is a prompt, not a verdict.
 EXPECTED_SECTIONS = ("intro", "verse", "chorus", "bridge", "outro")
@@ -592,6 +593,64 @@ def questions(result):
     out.append(
         "Paste this brief into a chat to work through the answers."
     )
+    return out
+
+
+def transpose_result(result, semitones, *, title, slug, project):
+    """A key-shifted copy of an ``analyze`` result, timeline intact.
+
+    Pitch moves, time does not: every midi in the instrument and voice
+    traces shifts by *semitones*, every chord symbol (and slash bass)
+    transposes, and sections, beats, and lyric timing stay exactly where
+    they were — the shifted audio keeps the original tempo, so the whole
+    Studio stays in sync against it.
+
+    Detected voicings shift fret-for-fret on the same strings when that
+    stays on the neck; a shape that would need a negative fret loses its
+    fingering instead, and the chart falls back to the textbook grip for
+    the new symbol. Stems are dropped — they still sound in the old key.
+    """
+    import copy
+
+    from . import chords as chords_mod
+
+    out = copy.deepcopy(result)
+    out["title"] = title
+    out["slug"] = slug
+    out["project"] = project
+    out["transposed_by"] = semitones
+    stages = out.get("stages") or {}
+    stages.pop("stems", None)
+
+    def shift_notes(notes):
+        for e in notes or []:
+            e["midi"] = int(e["midi"]) + semitones
+
+    def shift_chords(chord_list):
+        for c in chord_list or []:
+            if c.get("symbol"):
+                c["symbol"] = chords_mod.transpose_symbol(
+                    c["symbol"], semitones
+                )
+            positions = c.get("positions")
+            if positions and all(
+                0 <= p["fret"] + semitones <= chords_mod.MAX_FRET
+                for p in positions
+            ):
+                for p in positions:
+                    p["fret"] += semitones
+                    if "midi" in p:
+                        p["midi"] += semitones
+                        p["name"] = note_name(p["midi"])
+                c["shorthand"] = chords_mod.shorthand(positions)
+            else:
+                c.pop("positions", None)
+                c.pop("shorthand", None)
+
+    for stage_key in ("chords", "voice"):
+        stage = stages.get(stage_key) or {}
+        shift_notes(stage.get("notes"))
+        shift_chords(stage.get("chords"))
     return out
 
 

@@ -445,3 +445,111 @@ class TranscriptReadingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TransposeResultTests(unittest.TestCase):
+    """Key moves, clock does not."""
+
+    def _result(self):
+        return {
+            "title": "Part Of The Deal",
+            "slug": "part-of-the-deal",
+            "project": "/tmp/p",
+            "stages": {
+                "structure": {"summary": {"bpm": 80, "sections": [
+                    {"label": "verse", "start": 8.0, "end": 40.0,
+                     "seconds": 32.0},
+                ]}},
+                "stems": {"files": ["stems/vocals.wav"]},
+                "lyrics": {"text": "la", "segments": [
+                    {"start": 9.0, "end": 12.0, "text": "la"},
+                ]},
+                "chords": {
+                    "notes": [{"start": 8.5, "end": 9.0, "midi": 57}],
+                    "chords": [{
+                        "start": 8.5, "end": 9.4, "symbol": "Am",
+                        "shorthand": "x02210",
+                        "positions": [
+                            {"string": 5, "fret": 0, "midi": 45,
+                             "name": "A2"},
+                            {"string": 4, "fret": 2, "midi": 52,
+                             "name": "E3"},
+                        ],
+                    }],
+                },
+                "voice": {
+                    "notes": [{"start": 9.0, "end": 9.5, "midi": 64}],
+                    "chords": [],
+                },
+            },
+            "skipped": [],
+        }
+
+    def test_midis_and_symbols_shift_but_time_does_not(self):
+        out = brief.transpose_result(
+            self._result(), -2, title="Part Of The Deal (Gm)",
+            slug="potd-gm", project="/tmp/g",
+        )
+        chords_stage = out["stages"]["chords"]
+        self.assertEqual(chords_stage["notes"][0]["midi"], 55)
+        self.assertEqual(chords_stage["notes"][0]["start"], 8.5)
+        self.assertEqual(chords_stage["chords"][0]["symbol"], "Gm")
+        self.assertEqual(out["stages"]["voice"]["notes"][0]["midi"], 62)
+        # Structure and lyrics ride along untouched.
+        self.assertEqual(
+            out["stages"]["structure"]["summary"]["sections"][0]["start"],
+            8.0,
+        )
+        self.assertEqual(out["stages"]["lyrics"]["segments"][0]["start"], 9.0)
+        self.assertEqual(out["transposed_by"], -2)
+        self.assertEqual(out["title"], "Part Of The Deal (Gm)")
+
+    def test_open_string_voicing_loses_fingering_going_down(self):
+        out = brief.transpose_result(
+            self._result(), -2, title="t", slug="s", project="/tmp/g",
+        )
+        chord = out["stages"]["chords"]["chords"][0]
+        # x02210 down two needs fret -2: impossible, so the fingering goes
+        # and the chart falls back to Gm's textbook grip.
+        self.assertNotIn("positions", chord)
+        self.assertNotIn("shorthand", chord)
+
+    def test_fretted_voicing_slides_down_intact(self):
+        data = self._result()
+        data["stages"]["chords"]["chords"][0]["positions"] = [
+            {"string": 6, "fret": 5, "midi": 45, "name": "A2"},
+            {"string": 5, "fret": 7, "midi": 52, "name": "E3"},
+        ]
+        out = brief.transpose_result(
+            data, -2, title="t", slug="s", project="/tmp/g",
+        )
+        positions = out["stages"]["chords"]["chords"][0]["positions"]
+        self.assertEqual([p["fret"] for p in positions], [3, 5])
+        self.assertEqual(positions[0]["midi"], 43)
+        self.assertEqual(positions[0]["name"], "G2")
+
+    def test_stems_are_dropped_and_original_untouched(self):
+        data = self._result()
+        out = brief.transpose_result(
+            data, -2, title="t", slug="s", project="/tmp/g",
+        )
+        self.assertNotIn("stems", out["stages"])
+        # Deep copy: the source result keeps its stems and its key.
+        self.assertIn("stems", data["stages"])
+        self.assertEqual(data["stages"]["chords"]["chords"][0]["symbol"],
+                         "Am")
+
+
+class TransposeSymbolTests(unittest.TestCase):
+    def test_root_quality_and_bass_all_shift(self):
+        from music_stack import chords as chords_mod
+        self.assertEqual(chords_mod.transpose_symbol("Am", -2), "Gm")
+        self.assertEqual(chords_mod.transpose_symbol("Dsus4/A", -2),
+                         "Csus4/G")
+        self.assertEqual(chords_mod.transpose_symbol("F", -2), "Eb")
+        self.assertEqual(chords_mod.transpose_symbol("G5/D", 2), "A5/E")
+
+    def test_garbage_survives_unchanged(self):
+        from music_stack import chords as chords_mod
+        self.assertEqual(chords_mod.transpose_symbol("", -2), "")
+        self.assertEqual(chords_mod.transpose_symbol("N.C.", -2), "N.C.")

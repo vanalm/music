@@ -299,6 +299,34 @@ _PC.update({name: pc for pc, name in enumerate(FLAT)})
 _SYMBOL_RE = re.compile(r"^([A-G][#b]?)(.*)$")
 
 
+def transpose_symbol(symbol, semitones, *, flats=True):
+    """Shift a chord symbol's root (and slash bass) by *semitones*.
+
+    The quality string rides along untouched: ``Dsus4/A`` down two is
+    ``Csus4/G``. Unparseable symbols come back unchanged rather than
+    half-transposed.
+    """
+    if not symbol:
+        return symbol
+    names = FLAT if flats else SHARP
+
+    def shift(part):
+        match = _SYMBOL_RE.match(part)
+        if not match:
+            return part
+        root, quality = match.groups()
+        pc = _PC.get(root)
+        if pc is None:
+            return part
+        return names[(pc + semitones) % 12] + quality
+
+    core, slash, bass = symbol.partition("/")
+    out = shift(core)
+    if slash:
+        out += "/" + shift(bass)
+    return out
+
+
 def _positions_from_shorthand(short):
     return [
         {"string": 6 - i, "fret": int(ch)}

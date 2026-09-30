@@ -140,6 +140,81 @@ def normalize(src, dest, *, rate=TARGET_RATE, bit_depth=TARGET_BITS, overwrite=F
     return dest
 
 
+def has_rubberband():
+    """True when this ffmpeg was built with the Rubber Band filter."""
+    ffmpeg = which("ffmpeg")
+    if not ffmpeg:
+        return False
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-filters"],
+            capture_output=True, timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return b"rubberband" in proc.stdout
+
+
+def transpose_command(src, dest, *, semitones, rate=TARGET_RATE,
+                      rubberband=True, overwrite=False, ffmpeg="ffmpeg"):
+    """Build the ffmpeg argv for a pitch shift that keeps the tempo.
+
+    Two routes, same result shape: Rubber Band is a real time-domain
+    pitch shifter and sounds best; without it, resampling detunes pitch
+    *and* tempo together and ``atempo`` stretches the tempo back. The
+    atempo route only supports a 0.5–2.0 factor, which covers ±12
+    semitones — beyond an octave, install an ffmpeg with librubberband.
+    """
+    factor = 2.0 ** (semitones / 12.0)
+    if rubberband:
+        filter_arg = "rubberband=pitch={:.10f}".format(factor)
+    else:
+        filter_arg = "asetrate={:.0f},aresample={},atempo={:.10f}".format(
+            rate * factor, rate, 1.0 / factor
+        )
+    return [
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-y" if overwrite else "-n",
+        "-i", str(src),
+        "-vn",
+        "-af", filter_arg,
+        "-ar", str(rate),
+        str(dest),
+    ]
+
+
+def transpose(src, dest, *, semitones, rate=TARGET_RATE, overwrite=False):
+    """Write *src* pitch-shifted by *semitones* to *dest*, tempo unchanged.
+
+    The timeline is preserved on purpose: every timestamp the analysis
+    produced — sections, beats, note onsets, lyric timing — stays valid
+    against the shifted audio.
+    """
+    src, dest = Path(src), Path(dest)
+    if not src.exists():
+        raise AudioError("No such audio file: {}".format(src))
+    if dest.exists() and not overwrite:
+        raise AudioError(
+            "{} already exists. Pass --overwrite to replace it.".format(dest)
+        )
+    if abs(semitones) > 12 and not has_rubberband():
+        raise AudioError(
+            "Shifts beyond an octave need ffmpeg built with librubberband "
+            "(brew's ffmpeg has it)."
+        )
+    ffmpeg = require("ffmpeg")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        transpose_command(
+            src, dest, semitones=semitones, rate=rate,
+            rubberband=has_rubberband(), overwrite=overwrite, ffmpeg=ffmpeg,
+        )
+    )
+    return dest
+
+
 def _int_or_none(value):
     try:
         return int(value)
